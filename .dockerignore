@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.github
+.env
+.env.*
+*.log
+data/uploads
+release.sh
+release.ps1
+README.md
