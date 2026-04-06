@@ -119,6 +119,10 @@ export default function Play() {
   const [reconnecting, setReconnecting] = useState(false);
 
   const pendingNameRef = useRef("");
+  const stateRef = useRef<GameState | null>(null);
+  const answeredRef = useRef(false);
+  stateRef.current = state;
+  answeredRef.current = answered;
 
   useEffect(() => {
     camootLog("play", "mount", {
@@ -316,19 +320,17 @@ export default function Play() {
     });
   };
 
-  const onAnswer = useCallback(
-    (answer: PlayerAnswer) => {
-      if (!state || state.phase !== "question" || answered) return;
-      setLastAnswerSummary(formatPlayerAnswerForReveal(state.question, answer));
-      const s = getSocket();
-      s.emit("player_answer", {
-        answer,
-        questionIndex: state.questionIndex,
-        clientTime: Date.now(),
-      });
-    },
-    [state, answered]
-  );
+  const onAnswer = useCallback((answer: PlayerAnswer) => {
+    const st = stateRef.current;
+    if (!st || st.phase !== "question" || answeredRef.current) return;
+    setLastAnswerSummary(formatPlayerAnswerForReveal(st.question, answer));
+    const s = getSocket();
+    s.emit("player_answer", {
+      answer,
+      questionIndex: st.questionIndex,
+      clientTime: Date.now(),
+    });
+  }, []);
 
   const rank = useMemo(() => {
     if (!state || !playerId) return null;

@@ -120,10 +120,17 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     if (!mcResetKey) {
       setMcSelected([]);
       setSinglePickedId(null);
+      mcSelectedRef.current = [];
+      singlePickedRef.current = null;
       return;
     }
-    if (mcResetKey.includes("/M/")) setMcSelected([]);
-    else setSinglePickedId(null);
+    if (mcResetKey.includes("/M/")) {
+      setMcSelected([]);
+      mcSelectedRef.current = [];
+    } else {
+      setSinglePickedId(null);
+      singlePickedRef.current = null;
+    }
   }, [mcResetKey]);
 
   const mcIsMulti =
@@ -265,21 +272,27 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
         const s = new Set(prev);
         if (s.has(originalId)) s.delete(originalId);
         else s.add(originalId);
-        return [...s].sort((a, b) => a - b);
+        const next = [...s].sort((a, b) => a - b);
+        mcSelectedRef.current = next;
+        return next;
       });
     };
     const submitMc = () => {
+      const ids = mcSelectedRef.current;
+      if (ids.length === 0) return;
       playSubmit();
-      onSubmit(mcSelected);
+      onSubmit(ids);
     };
     const pickSingleMc = (originalId: number) => {
       playClick();
+      singlePickedRef.current = originalId;
       setSinglePickedId(originalId);
     };
     const submitSingleMc = () => {
-      if (singlePickedId === null) return;
+      const id = singlePickedRef.current;
+      if (id === null) return;
       playSubmit();
-      onSubmit(singlePickedId);
+      onSubmit(id);
     };
     const mcImageUrl = (q as { imageUrl?: string }).imageUrl;
     return (
@@ -327,7 +340,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             className="kh-btn kh-btn-primary qp-submit"
             disabled={disabled || mcSelected.length === 0}
             onPointerDown={(e) => {
-              if (disabled || mcSelected.length === 0) return;
+              if (disabled || mcSelectedRef.current.length === 0) return;
               onTouchOrPenPointerDown(e, submitMc);
             }}
             onClick={submitMc}
@@ -340,7 +353,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             className="kh-btn kh-btn-primary qp-submit"
             disabled={disabled || singlePickedId === null}
             onPointerDown={(e) => {
-              if (disabled || singlePickedId === null) return;
+              if (disabled || singlePickedRef.current === null) return;
               onTouchOrPenPointerDown(e, submitSingleMc);
             }}
             onClick={submitSingleMc}
