@@ -1,0 +1,432 @@
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import http from "http";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import multer from "multer";
+import sharp from "sharp";
+import { Server } from "socket.io";
+import QRCode from "qrcode";
+import { v4 as uuidv4 } from "uuid";
+import * as quizStore from "./quizStore.js";
+import * as gameManager from "./gameManager.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(__dirname, "..");
+const UPLOAD_DIR = path.join(ROOT, "data", "uploads");
+const MANAGER_PASSWORD = process.env.MANAGER_PASSWORD || "camoot123";
+const JOIN_BASE_URL = process.env.JOIN_BASE_URL || "";
+const PORT = Number(process.env.PORT) || 3001;
+
+const managerSessions = new Map();
+
+function requireManager(req, res, next) {
+  const token = req.headers["x-manager-token"];
+  if (!token || !managerSessions.has(token)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
+
+const app = express();
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json({ limit: "2mb" }));
+
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const uploadImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+app.post("/api/manager/login", (req, res) => {
+  const { password } = req.body || {};
+  if (password === MANAGER_PASSWORD) {
+    const token = uuidv4();
+    managerSessions.set(token, Date.now());
+    return res.json({ token });
+  }
+  res.status(401).json({ error: "Invalid password" });
+});
+
+app.get("/api/quizzes", requireManager, (_req, res) => {
+  res.json(quizStore.listQuizzes());
+});
+
+app.get("/api/quizzes/:id", requireManager, (req, res) => {
+  const q = quizStore.getQuiz(req.params.id);
+  if (!q) return res.status(404).json({ error: "Not found" });
+  res.json(q);
+});
+
+app.post("/api/quizzes", requireManager, (req, res) => {
+  const { title } = req.body || {};
+  res.json(quizStore.createQuiz({ title }));
+});
+
+app.put("/api/quizzes/:id", requireManager, (req, res) => {
+  const existing = quizStore.getQuiz(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+  const body = req.body || {};
+  const merged = {
+    ...existing,
+    ...body,
+    id: existing.id,
+    questions: body.questions !== undefined ? body.questions : existing.questions,
+  };
+  res.json(quizStore.saveQuiz(merged));
+});
+
+app.delete("/api/quizzes/:id", requireManager, (req, res) => {
+  quizStore.deleteQuiz(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post("/api/upload", requireManager, uploadImage.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file" });
+  const filename = `${uuidv4()}.webp`;
+  const dest = path.join(UPLOAD_DIR, filename);
+  try {
+    await sharp(req.file.buffer, { failOn: "none" })
+      .rotate()
+      .resize(4096, 4096, { fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 82, effort: 4 })
+      .toFile(dest);
+  } catch {
+    return res.status(400).json({ error: "Could not process image (use JPEG, PNG, GIF, WebP, etc.)" });
+  }
+  res.json({ url: `/uploads/${filename}` });
+});
+
+app.post("/api/games", requireManager, (req, res) => {
+  const { quizId } = req.body || {};
+  if (!quizId) return res.status(400).json({ error: "quizId required" });
+  const created = gameManager.createGame(quizId);
+  if (!created) return res.status(404).json({ error: "Quiz not found" });
+  res.json(created);
+});
+
+app.get("/api/qr", async (req, res) => {
+  const pin = String(req.query.pin || "");
+  if (pin.length !== 6 || !/^\d{6}$/.test(pin)) {
+    return res.status(400).send("Invalid pin");
+  }
+  const host = req.get("host") || "localhost";
+  const proto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
+  const base = JOIN_BASE_URL || `${proto}://${host}`;
+  const joinUrl = `${base.replace(/\/$/, "")}/play?pin=${pin}`;
+  try {
+    const png = await QRCode.toBuffer(joinUrl, { type: "png", width: 320, margin: 2 });
+    res.type("png").send(png);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" },
+});
+
+function broadcastGame(game) {
+  const pin = game.pin;
+  const hostPayload = gameManager.getPublicGameState(game, true);
+  const playerPayload = gameManager.getPublicGameState(game, false);
+  io.to(`host:${pin}`).emit("state", hostPayload);
+  io.to(`game:${pin}`).emit("state", playerPayload);
+}
+
+const autoRevealTimers = new Map();
+
+function clearQuestionDeadline(pin) {
+  const t = autoRevealTimers.get(pin);
+  if (t) {
+    clearTimeout(t);
+    autoRevealTimers.delete(pin);
+  }
+}
+
+function scheduleQuestionDeadline(pin) {
+  clearQuestionDeadline(pin);
+  const game = gameManager.getGameByPin(pin);
+  if (!game || game.phase !== "question") return;
+  const qs = game.quizSnapshot.questions || [];
+  const q = qs[game.questionIndex];
+  const ms = Math.max(500, (q?.timeLimitSec ?? 20) * 1000);
+  const idx = game.questionIndex;
+  const t = setTimeout(() => {
+    autoRevealTimers.delete(pin);
+    const g = gameManager.getGameByPin(pin);
+    if (!g || g.phase !== "question" || g.questionIndex !== idx) return;
+    g.phase = "reveal";
+    broadcastGame(g);
+  }, ms);
+  autoRevealTimers.set(pin, t);
+}
+
+const ADMIN_SESSION_MSG = "This live session was closed from the admin page.";
+
+/** Prefix server logs when debugging host kick / lobby remove. */
+function kickLog(...args) {
+  console.log("[camoot:kick]", ...args);
+}
+function kickWarn(...args) {
+  console.warn("[camoot:kick]", ...args);
+}
+
+function forceTerminateLiveSession(pin) {
+  clearQuestionDeadline(pin);
+  if (!gameManager.getGameByPin(pin)) return false;
+  io.to(`host:${pin}`).emit("session_ended", { message: ADMIN_SESSION_MSG });
+  io.to(`game:${pin}`).emit("session_ended", { message: ADMIN_SESSION_MSG });
+  gameManager.destroyGame(pin);
+  return true;
+}
+
+app.get("/api/admin/sessions", requireManager, (_req, res) => {
+  res.json(gameManager.listGamesSummary());
+});
+
+app.delete("/api/admin/sessions/:pin", requireManager, (req, res) => {
+  const raw = String(req.params.pin || "").replace(/\D/g, "");
+  const pin = raw.length === 6 ? raw : "";
+  if (!pin) return res.status(400).json({ error: "Invalid pin" });
+  if (!gameManager.getGameByPin(pin)) return res.status(404).json({ error: "Not found" });
+  forceTerminateLiveSession(pin);
+  res.json({ ok: true });
+});
+
+io.on("connection", (socket) => {
+  socket.on("host_join", ({ pin, hostToken }) => {
+    const game = gameManager.getGameByPin(pin);
+    if (!game || game.hostToken !== hostToken) {
+      socket.emit("error", { message: "Invalid host credentials" });
+      return;
+    }
+    socket.join(`host:${pin}`);
+    socket.data.role = "host";
+    socket.data.pin = pin;
+    socket.data.hostToken = hostToken;
+    socket.emit("state", gameManager.getPublicGameState(game, true));
+  });
+
+  socket.on("player_join", ({ pin, username, playerId }) => {
+    const game = gameManager.getGameByPin(pin);
+    if (!game) {
+      socket.emit("error", { message: "Game not found" });
+      return;
+    }
+
+    // Reconnect: same player rejoining after refresh or disconnect (any phase)
+    if (playerId && game.players.has(playerId)) {
+      const player = game.players.get(playerId);
+      player.socketId = socket.id;
+      gameManager.setPlayerSocket(game, playerId, socket.id);
+      socket.join(`game:${pin}`);
+      socket.data.role = "player";
+      socket.data.pin = pin;
+      socket.data.playerId = player.id;
+      socket.emit("joined", { playerId: player.id, pin: game.pin });
+      broadcastGame(game);
+      return;
+    }
+
+    if (game.phase !== "lobby") {
+      socket.emit("error", { message: "Game already started. Only returning players can rejoin." });
+      return;
+    }
+
+    const name = String(username || "Player").trim() || "Player";
+    if (gameManager.isLobbyNameTaken(game, name)) {
+      socket.emit("error", { message: "That name is already taken in this lobby. Choose another." });
+      return;
+    }
+    const player = gameManager.addPlayer(game, name, socket.id);
+    socket.join(`game:${pin}`);
+    socket.data.role = "player";
+    socket.data.pin = pin;
+    socket.data.playerId = player.id;
+    socket.emit("joined", { playerId: player.id, pin: game.pin });
+    broadcastGame(game);
+  });
+
+  socket.on("host_kick_player", (payload = {}) => {
+    const { pin: rawPin, playerId, hostToken: bodyToken } = payload;
+    kickLog("event recv", {
+      fromSocket: socket.id,
+      rawPin,
+      playerId,
+      payloadKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
+      dataPin: socket.data.pin,
+      dataRole: socket.data.role,
+      hasBodyToken: typeof bodyToken === "string" && bodyToken.length > 0,
+    });
+    const pin = String(rawPin || socket.data.pin || "").replace(/\D/g, "").slice(0, 6);
+    if (pin.length !== 6) {
+      kickWarn("abort: pin not 6 digits after normalize", { pin, rawPin, dataPin: socket.data.pin });
+      return;
+    }
+    const game = gameManager.getGameByPin(pin);
+    if (!game) {
+      kickWarn("abort: no game for pin", { pin });
+      return;
+    }
+    if (game.phase !== "lobby") {
+      kickWarn("abort: not lobby phase", { pin, phase: game.phase });
+      return;
+    }
+    const token = typeof bodyToken === "string" && bodyToken ? bodyToken : socket.data.hostToken;
+    if (!token || game.hostToken !== token) {
+      kickWarn("abort: host token mismatch", {
+        pin,
+        hadToken: !!token,
+        gameHasToken: !!game.hostToken,
+      });
+      return;
+    }
+    const targetId = String(playerId ?? "").trim();
+    const playerIdsBefore = [...game.players.keys()];
+    kickLog("attempt remove", { targetId, playerCount: game.players.size, playerIdsBefore });
+    const removed = gameManager.removePlayerFromLobby(game, targetId);
+    if (!removed) {
+      kickWarn("abort: playerId not in game", { targetId, playerIdsBefore });
+      return;
+    }
+    kickLog("removed ok", {
+      targetId,
+      name: removed.name,
+      hadSocketId: !!removed.socketId,
+      remainingPlayers: game.players.size,
+    });
+    const rid = removed.socketId;
+    const sock = rid ? io.sockets.sockets.get(rid) : null;
+    const kickPayload = { message: "Removed from the lobby by the host." };
+    if (sock) {
+      sock.leave(`game:${pin}`);
+      sock.emit("kicked", kickPayload);
+      delete sock.data.role;
+      delete sock.data.pin;
+      delete sock.data.playerId;
+      kickLog("notified socket via ref", { rid });
+    } else if (rid) {
+      io.to(rid).emit("kicked", kickPayload);
+      kickLog("notified socket via io.to", { rid });
+    } else {
+      kickLog("no live socket for removed player");
+    }
+    broadcastGame(game);
+  });
+
+  socket.on("host_start", () => {
+    const game = gameManager.getGameByPin(socket.data.pin);
+    if (!game || socket.data.role !== "host") return;
+    if (game.hostToken !== socket.data.hostToken) return;
+    if (game.phase !== "lobby") return;
+    if (game.players.size < 1) {
+      socket.emit("error", { message: "Wait for at least one player to join before starting." });
+      return;
+    }
+    clearQuestionDeadline(game.pin);
+    const snap = game.quizSnapshot;
+    const qs = snap.questions;
+    if (snap.shuffleQuestionOrder && Array.isArray(qs) && qs.length > 1) {
+      for (let i = qs.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [qs[i], qs[j]] = [qs[j], qs[i]];
+      }
+    }
+    game.phase = "question";
+    game.questionIndex = 0;
+    game.startedAt = Date.now();
+    gameManager.clearAnswers(game);
+    gameManager.refreshPlayerQuestionCache(game);
+    broadcastGame(game);
+    scheduleQuestionDeadline(game.pin);
+  });
+
+  socket.on("host_next", () => {
+    const game = gameManager.getGameByPin(socket.data.pin);
+    if (!game || socket.data.role !== "host") return;
+    if (game.hostToken !== socket.data.hostToken) return;
+    const qs = game.quizSnapshot.questions || [];
+    clearQuestionDeadline(game.pin);
+    if (game.phase === "question") {
+      game.phase = "reveal";
+      broadcastGame(game);
+      return;
+    }
+    if (game.phase === "reveal") {
+      if (game.questionIndex >= qs.length - 1) {
+        game.phase = "ended";
+        broadcastGame(game);
+        return;
+      }
+      game.questionIndex += 1;
+      game.phase = "question";
+      game.startedAt = Date.now();
+      gameManager.clearAnswers(game);
+      gameManager.refreshPlayerQuestionCache(game);
+      broadcastGame(game);
+      scheduleQuestionDeadline(game.pin);
+    }
+  });
+
+  socket.on("host_end_quiz", () => {
+    const pin = socket.data.pin;
+    const game = gameManager.getGameByPin(pin);
+    if (!game || socket.data.role !== "host") return;
+    if (game.hostToken !== socket.data.hostToken) return;
+    if (game.phase === "ended") return;
+    clearQuestionDeadline(pin);
+    game.phase = "ended";
+    broadcastGame(game);
+  });
+
+  socket.on("player_answer", ({ answer, questionIndex, clientTime }) => {
+    const pin = socket.data.pin;
+    const playerId = socket.data.playerId;
+    if (!pin || !playerId || socket.data.role !== "player") return;
+    const game = gameManager.getGameByPin(pin);
+    if (!game || game.phase !== "question") return;
+    if (game.questionIndex !== questionIndex) return;
+    if (game.answers.has(playerId)) return;
+
+    const elapsed = Math.max(0, Date.now() - (game.startedAt || Date.now()));
+    gameManager.recordAnswer(game, playerId, { answer, clientTime });
+    const result = gameManager.gradeAnswer(game, playerId, answer, elapsed);
+    socket.emit("answer_result", { ...result, questionIndex });
+    if (gameManager.allActivePlayersAnswered(game)) {
+      clearQuestionDeadline(pin);
+      game.phase = "reveal";
+    }
+    broadcastGame(game);
+  });
+
+  socket.on("disconnect", () => {
+    const pin = socket.data.pin;
+    if (!pin) return;
+    const game = gameManager.getGameByPin(pin);
+    if (!game) return;
+    if (socket.data.role === "player") {
+      gameManager.clearPlayerSocket(game, socket.id);
+      broadcastGame(game);
+    }
+  });
+});
+
+const distPath = path.join(ROOT, "dist");
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api") || req.path.startsWith("/uploads")) return next();
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+}
+
+app.use("/uploads", express.static(UPLOAD_DIR));
+
+server.listen(PORT, () => {
+  console.log(`Camoot server http://localhost:${PORT}`);
+});

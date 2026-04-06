@@ -1,0 +1,1290 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import NavHome from "../components/NavHome";
+import * as api from "../api";
+import {
+  playPickQuiz,
+  playSaved,
+  playTap,
+  playUnlockOk,
+  resumeSounds,
+} from "../sounds";
+import type { MatchPair, McOption, Quiz, QuizQuestion } from "../types";
+
+function getMcRows(options: (string | McOption)[]): McOption[] {
+  return options.map((raw) => {
+    if (typeof raw === "string") return { text: raw };
+    const o = raw as McOption & { wrongPickPenalty?: number };
+    const legacyTrap = o.wrongPickPenalty != null && o.wrongPickPenalty > 0;
+    return {
+      text: String(o.text ?? ""),
+      penalizeIfWrong: !!o.penalizeIfWrong || legacyTrap,
+    };
+  });
+}
+
+function serializeMcOptions(rows: McOption[]): (string | McOption)[] {
+  return rows.map((m) => {
+    if (m.penalizeIfWrong) return { text: m.text, penalizeIfWrong: true };
+    return m.text;
+  });
+}
+
+const TOKEN_KEY = "camoot_manager_token";
+/** Same key as Host page: set when starting live from Create so Host opens the lobby without a second login. */
+const HOST_MGR_TOKEN = "camoot_host_mgr_token";
+const HOST_SESSION = "camoot_host_session";
+
+const QUESTION_KIND: Record<QuizQuestion["type"], { label: string; tooltip: string }> = {
+  multiple_choice: {
+    label: "Choice",
+    tooltip:
+      "Multiple choice: players pick one or more answers from the options you list (correct answers can be marked as traps with a penalty).",
+  },
+  slider: {
+    label: "Slider",
+    tooltip: "Numeric slider: players drag to a value between your min and max; you set the correct value and optional tolerance.",
+  },
+  click_location: {
+    label: "Click",
+    tooltip: "Image tap: players tap somewhere on the picture; you define the correct circular region (normalized coordinates).",
+  },
+  order: {
+    label: "Order",
+    tooltip: "Ordering: players arrange items into the correct sequence by dragging.",
+  },
+  match: {
+    label: "Connect",
+    tooltip:
+      "Connect pairs: each row is one correct match (e.g. picture on the left, name on the right). Players see both sides shuffled and tap a left item then its match on the right.",
+  },
+  odd_color_out: {
+    label: "Odd color",
+    tooltip:
+      "Four squares: three share one color, one is different. Which block is odd is random each game. Tweak the two hex colors for easier or meaner difficulty.",
+  },
+};
+
+const ADD_QUESTION_TYPES: QuizQuestion["type"][] = [
+  "multiple_choice",
+  "slider",
+  "click_location",
+  "order",
+  "match",
+  "odd_color_out",
+];
+
+function AddQuestionToolbar({
+  onAdd,
+  style,
+}: {
+  onAdd: (type: QuizQuestion["type"]) => void;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: "0.5rem",
+        flexWrap: "wrap",
+        marginBottom: "1rem",
+        ...style,
+      }}
+    >
+      <span style={{ fontWeight: 700, alignSelf: "center" }}>Add question:</span>
+      {ADD_QUESTION_TYPES.map((type) => (
+        <button
+          key={type}
+          type="button"
+          className="kh-btn kh-btn-outline kh-btn-sm"
+          title={QUESTION_KIND[type].tooltip}
+          onClick={() => onAdd(type)}
+        >
+          {QUESTION_KIND[type].label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function newId() {
+  return crypto.randomUUID();
+}
+
+function hexToColorInput(hex: string): string {
+  const s = (hex || "").trim();
+  const full = s.match(/^#([0-9a-fA-F]{6})$/);
+  if (full) return `#${full[1].toLowerCase()}`;
+  const short = s.match(/^#([0-9a-fA-F]{3})$/);
+  if (short) {
+    const x = short[1];
+    return `#${x[0]}${x[0]}${x[1]}${x[1]}${x[2]}${x[2]}`.toLowerCase();
+  }
+  return "#808080";
+}
+
+export default function Manager() {
+  const [token, setToken] = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY));
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [quizzes, setQuizzes] = useState<{ id: string; title: string; questionCount: number }[]>([]);
+  const [editing, setEditing] = useState<Quiz | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!token) return;
+    try {
+      const list = await api.listQuizzes(token);
+      setQuizzes(list);
+      setLoadError(null);
+    } catch {
+      setLoadError("Session expired. Log in again.");
+      setToken(null);
+      sessionStorage.removeItem(TOKEN_KEY);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const login = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    try {
+      const t = await api.managerLogin(password);
+      sessionStorage.setItem(TOKEN_KEY, t);
+      setToken(t);
+      setPassword("");
+      resumeSounds();
+      playUnlockOk();
+    } catch {
+      setLoginError("Wrong password.");
+    }
+  };
+
+  const logout = () => {
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(HOST_MGR_TOKEN);
+    setToken(null);
+    setEditing(null);
+  };
+
+  const create = async () => {
+    if (!token) return;
+    resumeSounds();
+    playTap();
+    const q = await api.createQuiz(token, "New quiz");
+    await refresh();
+    const full = await api.getQuiz(token, q.id);
+    setEditing(full);
+  };
+
+  const openEdit = async (id: string) => {
+    if (!token) return;
+    resumeSounds();
+    playTap();
+    const full = await api.getQuiz(token, id);
+    setEditing(full);
+  };
+
+  const saveEditing = async () => {
+    if (!token || !editing) return;
+    await api.saveQuiz(token, editing);
+    playSaved();
+    await refresh();
+  };
+
+  const remove = async (id: string) => {
+    if (!token || !confirm("Delete this quiz?")) return;
+    await api.deleteQuiz(token, id);
+    if (editing?.id === id) setEditing(null);
+    await refresh();
+  };
+
+  const hostLive = async (quizId: string) => {
+    if (!token) return;
+    try {
+      const g = await api.createGame(token, quizId);
+      resumeSounds();
+      playPickQuiz();
+      sessionStorage.setItem(
+        HOST_SESSION,
+        JSON.stringify({ pin: g.pin, hostToken: g.hostToken, quizTitle: g.quizTitle }),
+      );
+      sessionStorage.setItem(HOST_MGR_TOKEN, token);
+      window.location.href = "/host";
+    } catch {
+      alert("Could not create game.");
+    }
+  };
+
+  if (!token) {
+    return (
+      <div className="kh-page">
+        <div className="kh-page-narrow-sm">
+          <div className="kh-nav-home-wrap">
+            <NavHome label="Back to home" />
+          </div>
+          <div className="kh-card">
+            <h1 style={{ marginTop: 0, color: "var(--camoot-purple)" }}>Create</h1>
+            <p>Same password as <strong>Host</strong>. Build and edit quizzes here.</p>
+            {loginError && <p style={{ color: "var(--camoot-pink)", fontWeight: 600 }}>{loginError}</p>}
+            <form onSubmit={login}>
+              <input
+                type="password"
+                className="kh-input"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+                style={{ marginBottom: "1rem" }}
+              />
+            <button type="submit" className="kh-btn kh-btn-primary kh-btn-block">
+              Unlock
+            </button>
+            </form>
+            <p style={{ fontSize: "0.9rem", color: "#666", marginTop: "1.25rem" }}>
+              Set <code>MANAGER_PASSWORD</code> in production (default <code>camoot123</code>).
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (editing) {
+    return (
+      <div className="kh-page">
+        <div className="kh-page-narrow kh-page-editor-quiz">
+          <div className="kh-editor-nav-row">
+            <button
+              type="button"
+              className="kh-btn kh-btn-outline kh-btn-sm"
+              onClick={() => setEditing(null)}
+            >
+              ← Back to list
+            </button>
+          </div>
+          <QuizEditor quiz={editing} token={token} onChange={setEditing} onSave={saveEditing} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="kh-page">
+      <div className="kh-page-narrow" style={{ maxWidth: 800 }}>
+        <div className="kh-nav-home-wrap">
+          <NavHome label="Back to home" />
+        </div>
+        <div className="kh-card" style={{ maxWidth: "100%" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}>
+          <h1 style={{ margin: 0, color: "var(--camoot-purple)" }}>Your quizzes</h1>
+          <button type="button" className="kh-btn kh-btn-outline kh-btn-sm" onClick={logout}>
+            Log out
+          </button>
+        </div>
+        {loadError && <p style={{ color: "var(--camoot-pink)" }}>{loadError}</p>}
+        <div style={{ margin: "1rem 0", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button type="button" className="kh-btn kh-btn-primary" onClick={create}>
+            New quiz
+          </button>
+        </div>
+        <ul className="kh-mgr-list">
+          {quizzes.map((q) => (
+            <li key={q.id}>
+              <div className="kh-mgr-row-main">
+                <strong>{q.title}</strong>
+                <span className="kh-mgr-row-meta">
+                  {q.questionCount} questions · <code>{q.id}</code>
+                </span>
+              </div>
+              <div className="kh-mgr-row-actions">
+                <button type="button" className="kh-btn kh-btn-outline kh-btn-sm" onClick={() => openEdit(q.id)}>
+                  Edit
+                </button>
+                <button type="button" className="kh-btn kh-btn-success kh-btn-sm" onClick={() => hostLive(q.id)}>
+                  Host live
+                </button>
+                <button type="button" className="kh-btn kh-btn-danger kh-btn-sm" onClick={() => remove(q.id)}>
+                  Delete
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QuizEditor({
+  quiz,
+  token,
+  onChange,
+  onSave,
+}: {
+  quiz: Quiz;
+  token: string;
+  onChange: (q: Quiz) => void;
+  onSave: () => void | Promise<void>;
+}) {
+  const updateQuestion = (index: number, patch: Partial<QuizQuestion>) => {
+    const questions = [...quiz.questions];
+    questions[index] = { ...questions[index], ...patch } as QuizQuestion;
+    onChange({ ...quiz, questions });
+  };
+
+  const makeNewQuestion = (type: QuizQuestion["type"]): QuizQuestion => {
+    const base = { id: newId(), timeLimitSec: 20, points: 1000 };
+
+    if (type === "multiple_choice") {
+      return {
+        ...base,
+        type: "multiple_choice",
+        question: "New question",
+        options: ["A", "B", "C", "D"],
+        correctIndices: [0],
+        shuffleOptions: true,
+      };
+    }
+    if (type === "slider") {
+      return {
+        ...base,
+        type: "slider",
+        question: "Slide to the answer",
+        min: 0,
+        max: 100,
+        step: 1,
+        correctValue: 50,
+        tolerance: 0,
+      };
+    }
+    if (type === "click_location") {
+      return {
+        ...base,
+        type: "click_location",
+        question: "Click the correct location",
+        imageUrl: "https://picsum.photos/800/500",
+        correctRegion: { x: 0.5, y: 0.5, radius: 0.12 },
+      };
+    }
+    if (type === "odd_color_out") {
+      return {
+        ...base,
+        type: "odd_color_out",
+        question: "Which square is a different color?",
+        baseColor: "#0D47A1",
+        oddColor: "#64B5F6",
+        explanation: "Three deep blue squares, one lighter blue. Still tricky for some color vision, but obvious if you see blue levels well.",
+      };
+    }
+    if (type === "match") {
+      const demoPairs: MatchPair[] = [
+        {
+          left: { text: "Nurse", imageUrl: "https://picsum.photos/seed/nurse180/200/200" },
+          right: { text: "Hospital care" },
+        },
+        {
+          left: { text: "Engineer", imageUrl: "https://picsum.photos/seed/engineer180/200/200" },
+          right: { text: "Builds systems" },
+        },
+        {
+          left: { text: "Banker", imageUrl: "https://picsum.photos/seed/banker180/200/200" },
+          right: { text: "Works with finance" },
+        },
+      ];
+      return {
+        ...base,
+        type: "match",
+        question: "Match each picture to the correct label",
+        pairs: demoPairs,
+      };
+    }
+    const orderItems = ["First", "Second", "Third"];
+    const correctOrder = orderItems.map((_, i) => i);
+    return {
+      ...base,
+      type: "order",
+      question: "Put items in the right order",
+      items: orderItems,
+      correctOrder,
+    };
+  };
+
+  const addQuestion = (type: QuizQuestion["type"]) => {
+    onChange({ ...quiz, questions: [...quiz.questions, makeNewQuestion(type)] });
+  };
+
+  const removeQuestion = (index: number) => {
+    const questions = quiz.questions.filter((_, i) => i !== index);
+    onChange({ ...quiz, questions });
+  };
+
+  const moveQuestion = (index: number, dir: -1 | 1) => {
+    const j = index + dir;
+    if (j < 0 || j >= quiz.questions.length) return;
+    const questions = [...quiz.questions];
+    [questions[index], questions[j]] = [questions[j], questions[index]];
+    onChange({ ...quiz, questions });
+  };
+
+  /** `bottomOnly` at page top, `topOnly` at page bottom, `both` in between. */
+  const [editorScrollRail, setEditorScrollRail] = useState<
+    "none" | "bottomOnly" | "topOnly" | "both"
+  >("none");
+
+  useEffect(() => {
+    const EDGE = 132;
+    const update = () => {
+      const doc = document.documentElement;
+      const sh = doc.scrollHeight;
+      const vh = window.innerHeight;
+      if (sh <= vh + 56) {
+        setEditorScrollRail("none");
+        return;
+      }
+      const y = window.scrollY;
+      const distBottom = sh - y - vh;
+      const nearTop = y < EDGE;
+      const nearBottom = distBottom < EDGE;
+      if (nearTop && !nearBottom) setEditorScrollRail("bottomOnly");
+      else if (nearBottom && !nearTop) setEditorScrollRail("topOnly");
+      else setEditorScrollRail("both");
+    };
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    const t = window.setTimeout(update, 100);
+    return () => {
+      window.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+      window.clearTimeout(t);
+    };
+  }, [quiz.questions.length, quiz.title]);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+  };
+
+  const scrollToBottom = () => {
+    const doc = document.documentElement;
+    const body = document.body;
+    const h = Math.max(doc.scrollHeight, body.scrollHeight, doc.offsetHeight, body.offsetHeight);
+    const maxTop = Math.max(0, h - window.innerHeight);
+    window.scrollTo({ top: maxTop, left: 0, behavior: "smooth" });
+  };
+
+  const showJumpTop = editorScrollRail === "topOnly" || editorScrollRail === "both";
+  const showJumpBottom = editorScrollRail === "bottomOnly" || editorScrollRail === "both";
+
+  return (
+    <>
+      <div className="kh-card" style={{ maxWidth: 900 }}>
+        <label style={{ fontWeight: 700, display: "block" }}>Quiz title</label>
+        <input
+          className="kh-input"
+          value={quiz.title}
+          onChange={(e) => onChange({ ...quiz, title: e.target.value })}
+          style={{ marginBottom: "1rem" }}
+        />
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "0.5rem",
+            marginBottom: "1rem",
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={!!quiz.shuffleQuestionOrder}
+            onChange={(e) =>
+              onChange({
+                ...quiz,
+                shuffleQuestionOrder: e.target.checked ? true : undefined,
+              })
+            }
+            style={{ marginTop: "0.2rem" }}
+          />
+          <span>
+            Randomize question order for each game
+            <span style={{ display: "block", fontSize: "0.88rem", color: "#555", fontWeight: 400 }}>
+              When the host taps Start, questions are shuffled once for that session. Order in the editor is unchanged.
+            </span>
+          </span>
+        </label>
+        <p style={{ fontSize: "0.9rem", color: "#555", margin: "0 0 0.75rem" }}>
+          New questions are added at the bottom. Use ↑ / ↓ on a card to reorder.
+        </p>
+        <AddQuestionToolbar onAdd={addQuestion} />
+        {quiz.questions.map((question, index) => (
+          <div key={question.id} className="kh-q-block">
+            <div className="kh-q-head">
+              <span className="kh-q-head-title">
+                <span className="kh-q-head-num">Question {index + 1}</span>
+                <span className="kh-q-type-badge" title={QUESTION_KIND[question.type].tooltip}>
+                  {QUESTION_KIND[question.type].label}
+                </span>
+              </span>
+              <span style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="kh-btn kh-btn-outline kh-btn-sm"
+                  style={{ minWidth: "2.35rem" }}
+                  title="Move up"
+                  disabled={index === 0}
+                  onClick={() => moveQuestion(index, -1)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="kh-btn kh-btn-outline kh-btn-sm"
+                  style={{ minWidth: "2.35rem" }}
+                  title="Move down"
+                  disabled={index === quiz.questions.length - 1}
+                  onClick={() => moveQuestion(index, 1)}
+                >
+                  ↓
+                </button>
+                <button type="button" className="kh-btn kh-btn-danger kh-btn-sm" onClick={() => removeQuestion(index)}>
+                  Delete question
+                </button>
+              </span>
+            </div>
+            <QuestionFields question={question} token={token} onChange={(patch) => updateQuestion(index, patch)} />
+          </div>
+        ))}
+        <AddQuestionToolbar
+          onAdd={addQuestion}
+          style={{ marginTop: "1.25rem", marginBottom: "0.75rem" }}
+        />
+        <button type="button" className="kh-btn kh-btn-primary" onClick={() => onSave()}>
+          Save quiz
+        </button>
+      </div>
+      {editorScrollRail !== "none" && (
+        <div className="kh-editor-jump-layer" aria-live="polite">
+          {showJumpTop && (
+            <button
+              type="button"
+              className="kh-btn kh-btn-outline kh-btn-sm kh-editor-jump kh-editor-jump-top"
+              onClick={scrollToTop}
+              title="Scroll to top of page"
+            >
+              Jump to top
+            </button>
+          )}
+          {showJumpBottom && (
+            <button
+              type="button"
+              className="kh-btn kh-btn-outline kh-btn-sm kh-editor-jump kh-editor-jump-bottom"
+              onClick={scrollToBottom}
+              title="Scroll to bottom of page"
+            >
+              Jump to bottom
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function QuestionFields({
+  question,
+  token,
+  onChange,
+}: {
+  question: QuizQuestion;
+  token: string;
+  onChange: (patch: Partial<QuizQuestion>) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+
+  const upload = async (file: File) => {
+    setUploading(true);
+    try {
+      const { url } = await api.uploadImage(token, file);
+      onChange({ imageUrl: url } as Partial<QuizQuestion>);
+    } catch {
+      alert("Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="kh-q-fields">
+      <label>Prompt</label>
+      <textarea
+        className="kh-input"
+        rows={2}
+        value={question.question}
+        onChange={(e) => onChange({ question: e.target.value } as Partial<QuizQuestion>)}
+        style={{ marginBottom: "0.75rem" }}
+      />
+      <div className="kh-row">
+        <label>Time (sec)</label>
+        <input
+          type="number"
+          className="kh-input"
+          value={question.timeLimitSec ?? 20}
+          onChange={(e) => onChange({ timeLimitSec: Number(e.target.value) } as Partial<QuizQuestion>)}
+        />
+        <label>Max points</label>
+        <input
+          type="number"
+          className="kh-input"
+          value={question.points ?? 1000}
+          onChange={(e) => onChange({ points: Number(e.target.value) } as Partial<QuizQuestion>)}
+        />
+      </div>
+
+      <label>Explanation (optional, shown to everyone on the answer screen)</label>
+      <textarea
+        className="kh-input"
+        rows={2}
+        value={question.explanation ?? ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          onChange({ explanation: v.trim() === "" ? undefined : v } as Partial<QuizQuestion>);
+        }}
+        style={{ marginBottom: "0.75rem" }}
+        placeholder="Short explanation after the reveal…"
+      />
+      {question.type !== "multiple_choice" && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: "0.65rem",
+            marginBottom: "0.85rem",
+          }}
+        >
+          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 600 }}>
+            <input
+              type="checkbox"
+              checked={!!question.penaltyOnWrong}
+              onChange={(e) =>
+                onChange(
+                  e.target.checked
+                    ? ({ penaltyOnWrong: true, penaltyPoints: question.penaltyPoints ?? 200 } as Partial<QuizQuestion>)
+                    : ({ penaltyOnWrong: undefined, penaltyPoints: undefined } as Partial<QuizQuestion>)
+                )
+              }
+            />
+            Subtract points when wrong (whole answer)
+          </label>
+          {question.penaltyOnWrong ? (
+            <>
+              <label style={{ marginLeft: "0.25rem" }}>Penalty</label>
+              <input
+                type="number"
+                min={0}
+                className="kh-input"
+                style={{ maxWidth: "7rem" }}
+                value={question.penaltyPoints ?? 0}
+                onChange={(e) => onChange({ penaltyPoints: Number(e.target.value) } as Partial<QuizQuestion>)}
+              />
+            </>
+          ) : null}
+        </div>
+      )}
+
+      {question.type === "multiple_choice" && (
+        <McEditor q={question} onChange={onChange} />
+      )}
+      {question.type === "slider" && (
+        <>
+          <div className="kh-row">
+            <label>Min</label>
+            <input
+              type="number"
+              className="kh-input"
+              value={question.min}
+              onChange={(e) => onChange({ min: Number(e.target.value) } as Partial<QuizQuestion>)}
+            />
+            <label>Max</label>
+            <input
+              type="number"
+              className="kh-input"
+              value={question.max}
+              onChange={(e) => onChange({ max: Number(e.target.value) } as Partial<QuizQuestion>)}
+            />
+            <label>Step</label>
+            <input
+              type="number"
+              className="kh-input"
+              value={question.step ?? 1}
+              onChange={(e) => onChange({ step: Number(e.target.value) } as Partial<QuizQuestion>)}
+            />
+          </div>
+          <div className="kh-row">
+            <label>Correct</label>
+            <input
+              type="number"
+              className="kh-input"
+              value={question.correctValue}
+              onChange={(e) => onChange({ correctValue: Number(e.target.value) } as Partial<QuizQuestion>)}
+            />
+            <label>Tolerance</label>
+            <input
+              type="number"
+              className="kh-input"
+              value={question.tolerance ?? 0}
+              onChange={(e) => onChange({ tolerance: Number(e.target.value) } as Partial<QuizQuestion>)}
+            />
+          </div>
+        </>
+      )}
+      {question.type === "click_location" && (
+        <>
+          <label>Image URL (or upload)</label>
+          <input
+            className="kh-input"
+            value={question.imageUrl}
+            onChange={(e) => onChange({ imageUrl: e.target.value } as Partial<QuizQuestion>)}
+            style={{ marginBottom: "0.5rem" }}
+          />
+          <input
+            type="file"
+            accept="image/*"
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) upload(f);
+            }}
+          />
+          <p style={{ fontSize: "0.85rem", color: "#666" }}>Target (0–1): center x, y, radius</p>
+          <div className="kh-row">
+            <label>x</label>
+            <input
+              type="number"
+              step="0.01"
+              className="kh-input"
+              value={question.correctRegion.x}
+              onChange={(e) =>
+                onChange({
+                  correctRegion: { ...question.correctRegion, x: Number(e.target.value) },
+                } as Partial<QuizQuestion>)
+              }
+            />
+            <label>y</label>
+            <input
+              type="number"
+              step="0.01"
+              className="kh-input"
+              value={question.correctRegion.y}
+              onChange={(e) =>
+                onChange({
+                  correctRegion: { ...question.correctRegion, y: Number(e.target.value) },
+                } as Partial<QuizQuestion>)
+              }
+            />
+            <label>r</label>
+            <input
+              type="number"
+              step="0.01"
+              className="kh-input"
+              value={question.correctRegion.radius ?? 0.1}
+              onChange={(e) =>
+                onChange({
+                  correctRegion: { ...question.correctRegion, radius: Number(e.target.value) },
+                } as Partial<QuizQuestion>)
+              }
+            />
+          </div>
+        </>
+      )}
+      {question.type === "order" && <OrderEditor q={question} onChange={onChange} />}
+      {question.type === "match" && <MatchEditor q={question} token={token} onChange={onChange} />}
+      {question.type === "odd_color_out" && (
+        <>
+          <p style={{ fontSize: "0.88rem", color: "#555", marginTop: 0 }}>
+            Three blocks use <strong>Base</strong>, one random block uses <strong>Odd</strong>. Defaults are easy to
+            spot; use closer hex values if you want it harder.
+          </p>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "1.25rem",
+              alignItems: "flex-end",
+              marginBottom: "0.75rem",
+            }}
+          >
+            <div>
+              <label style={{ display: "block", fontWeight: 600, marginBottom: "0.25rem" }}>Base color</label>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <input
+                  type="color"
+                  value={hexToColorInput(question.baseColor)}
+                  onChange={(e) => onChange({ baseColor: e.target.value } as Partial<QuizQuestion>)}
+                  aria-label="Pick base color"
+                />
+                <input
+                  className="kh-input"
+                  style={{ width: "8rem" }}
+                  value={question.baseColor}
+                  onChange={(e) => onChange({ baseColor: e.target.value.trim() } as Partial<QuizQuestion>)}
+                  placeholder="#0D47A1"
+                />
+              </div>
+            </div>
+            <div>
+              <label style={{ display: "block", fontWeight: 600, marginBottom: "0.25rem" }}>Odd color</label>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <input
+                  type="color"
+                  value={hexToColorInput(question.oddColor)}
+                  onChange={(e) => onChange({ oddColor: e.target.value } as Partial<QuizQuestion>)}
+                  aria-label="Pick odd color"
+                />
+                <input
+                  className="kh-input"
+                  style={{ width: "8rem" }}
+                  value={question.oddColor}
+                  onChange={(e) => onChange({ oddColor: e.target.value.trim() } as Partial<QuizQuestion>)}
+                  placeholder="#64B5F6"
+                />
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <div style={{ textAlign: "center", fontSize: "0.8rem", color: "#666" }}>
+              <div
+                style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: 8,
+                  backgroundColor: hexToColorInput(question.baseColor),
+                  border: "1px solid #ccc",
+                }}
+              />
+              Base
+            </div>
+            <div style={{ textAlign: "center", fontSize: "0.8rem", color: "#666" }}>
+              <div
+                style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: 8,
+                  backgroundColor: hexToColorInput(question.oddColor),
+                  border: "1px solid #ccc",
+                }}
+              />
+              Odd
+            </div>
+          </div>
+          <p style={{ fontSize: "0.78rem", color: "#888", marginBottom: 0 }}>
+            Live games pick a random square for “odd”; players always see four tiles.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MatchEditor({
+  q,
+  token,
+  onChange,
+}: {
+  q: Extract<QuizQuestion, { type: "match" }>;
+  token: string;
+  onChange: (patch: Partial<QuizQuestion>) => void;
+}) {
+  const [uploadKey, setUploadKey] = useState<string | null>(null);
+
+  const upload = async (side: "left" | "right", index: number, file: File) => {
+    const key = `${side}-${index}`;
+    setUploadKey(key);
+    try {
+      const { url } = await api.uploadImage(token, file);
+      const pairs = q.pairs.map((p, i) => {
+        if (i !== index) return p;
+        if (side === "left") return { ...p, left: { ...p.left, imageUrl: url } };
+        return { ...p, right: { ...p.right, imageUrl: url } };
+      });
+      onChange({ pairs } as Partial<QuizQuestion>);
+    } catch {
+      alert("Upload failed");
+    } finally {
+      setUploadKey(null);
+    }
+  };
+
+  const setPairs = (pairs: MatchPair[]) => onChange({ pairs } as Partial<QuizQuestion>);
+
+  const patchLeft = (index: number, partial: Partial<MatchPair["left"]>) => {
+    const next = q.pairs.map((p, i) => (i === index ? { ...p, left: { ...p.left, ...partial } } : p));
+    setPairs(next);
+  };
+
+  const patchRight = (index: number, partial: Partial<MatchPair["right"]>) => {
+    const next = q.pairs.map((p, i) => (i === index ? { ...p, right: { ...p.right, ...partial } } : p));
+    setPairs(next);
+  };
+
+  const addPair = () => {
+    setPairs([...q.pairs, { left: { text: "Left" }, right: { text: "Right" } }]);
+  };
+
+  const removePair = (index: number) => {
+    if (q.pairs.length <= 2) return;
+    setPairs(q.pairs.filter((_, i) => i !== index));
+  };
+
+  return (
+    <>
+      <p style={{ fontSize: "0.9rem", color: "#555", marginTop: 0 }}>
+        Each row is one correct pair. The server shuffles the left column and the right column separately. Players match by
+        tapping a left card then the matching right card. Optional images on either side (URL or upload).
+      </p>
+      {q.pairs.map((pair, index) => (
+        <div
+          key={index}
+          className="kh-match-pair-row"
+          style={{
+            border: "1px solid #ddd",
+            borderRadius: 12,
+            padding: "0.85rem",
+            marginBottom: "0.75rem",
+            background: "#fff",
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: "0.5rem" }}>Pair {index + 1}</div>
+          <div className="kh-row" style={{ marginBottom: "0.5rem" }}>
+            <span style={{ fontWeight: 600, gridColumn: "1 / -1" }}>Left</span>
+            <label>Text</label>
+            <input
+              className="kh-input"
+              value={pair.left.text}
+              onChange={(e) => patchLeft(index, { text: e.target.value })}
+            />
+            <label>Image URL</label>
+            <input
+              className="kh-input"
+              value={pair.left.imageUrl ?? ""}
+              onChange={(e) =>
+                patchLeft(index, { imageUrl: e.target.value.trim() === "" ? undefined : e.target.value })
+              }
+            />
+            <label>Upload</label>
+            <input
+              type="file"
+              accept="image/*"
+              disabled={uploadKey !== null}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void upload("left", index, f);
+              }}
+            />
+          </div>
+          <div className="kh-row">
+            <span style={{ fontWeight: 600, gridColumn: "1 / -1" }}>Right</span>
+            <label>Text</label>
+            <input
+              className="kh-input"
+              value={pair.right.text}
+              onChange={(e) => patchRight(index, { text: e.target.value })}
+            />
+            <label>Image URL</label>
+            <input
+              className="kh-input"
+              value={pair.right.imageUrl ?? ""}
+              onChange={(e) =>
+                patchRight(index, { imageUrl: e.target.value.trim() === "" ? undefined : e.target.value })
+              }
+            />
+            <label>Upload</label>
+            <input
+              type="file"
+              accept="image/*"
+              disabled={uploadKey !== null}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void upload("right", index, f);
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            className="kh-btn kh-btn-danger kh-btn-sm"
+            style={{ marginTop: "0.5rem" }}
+            disabled={q.pairs.length <= 2}
+            onClick={() => removePair(index)}
+          >
+            Remove pair
+          </button>
+        </div>
+      ))}
+      <button type="button" className="kh-btn kh-btn-outline kh-btn-sm" onClick={addPair}>
+        + Add pair
+      </button>
+    </>
+  );
+}
+
+function mcResolvedCorrect(q: Extract<QuizQuestion, { type: "multiple_choice" }>): number[] {
+  if (Array.isArray(q.correctIndices) && q.correctIndices.length > 0) {
+    return [...new Set(q.correctIndices)]
+      .filter((i) => Number.isInteger(i) && i >= 0 && i < q.options.length)
+      .sort((a, b) => a - b);
+  }
+  if (typeof q.correctIndex === "number" && q.correctIndex >= 0 && q.correctIndex < q.options.length) {
+    return [q.correctIndex];
+  }
+  return [0];
+}
+
+function McEditor({
+  q,
+  onChange,
+}: {
+  q: Extract<QuizQuestion, { type: "multiple_choice" }>;
+  onChange: (patch: Partial<QuizQuestion>) => void;
+}) {
+  const optionTextRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const focusOptionTextIndex = useRef<number | null>(null);
+  const rows = getMcRows(q.options);
+
+  useEffect(() => {
+    const idx = focusOptionTextIndex.current;
+    if (idx == null || idx < 0 || idx >= rows.length) return;
+    focusOptionTextIndex.current = null;
+    requestAnimationFrame(() => {
+      const el = optionTextRefs.current[idx];
+      el?.focus();
+      el?.select();
+    });
+  }, [q.options.length]);
+  const penaltyTotalActive = (q.mcPenaltyPoints ?? 0) > 0;
+  const pushOptions = (next: McOption[]) => {
+    onChange({ options: serializeMcOptions(next) } as Partial<QuizQuestion>);
+  };
+  const setMcPenaltyTotal = (raw: string) => {
+    const n = raw === "" ? 0 : Math.max(0, Math.floor(Number(raw)) || 0);
+    if (n <= 0) {
+      const cleared = getMcRows(q.options).map((r) => ({ text: r.text, penalizeIfWrong: false }));
+      onChange({
+        mcPenaltyPoints: undefined,
+        options: serializeMcOptions(cleared),
+      } as Partial<QuizQuestion>);
+    } else {
+      onChange({ mcPenaltyPoints: n } as Partial<QuizQuestion>);
+    }
+  };
+  const setOptionText = (i: number, text: string) => {
+    pushOptions(rows.map((r, j) => (j === i ? { ...r, text } : r)));
+  };
+  const setOptionPenalize = (i: number, checked: boolean) => {
+    pushOptions(rows.map((r, j) => (j === i ? { ...r, penalizeIfWrong: checked } : r)));
+  };
+  const addOption = () => pushOptions([...rows, { text: `Option ${rows.length + 1}` }]);
+  const removeOption = (i: number) => {
+    if (rows.length <= 2) return;
+    const nextRows = rows.filter((_, j) => j !== i);
+    const cur = mcResolvedCorrect(q)
+      .filter((j) => j !== i)
+      .map((j) => (j > i ? j - 1 : j));
+    onChange({
+      options: serializeMcOptions(nextRows),
+      correctIndices: cur,
+      correctIndex: undefined,
+    } as Partial<QuizQuestion>);
+  };
+  const toggleCorrect = (i: number) => {
+    const cur = mcResolvedCorrect(q);
+    if (cur.includes(i)) {
+      if (cur.length <= 1) return;
+      onChange({ correctIndices: cur.filter((x) => x !== i), correctIndex: undefined });
+    } else {
+      onChange({ correctIndices: [...cur, i].sort((a, b) => a - b), correctIndex: undefined });
+    }
+  };
+  const correct = mcResolvedCorrect(q);
+  return (
+    <>
+      <p style={{ fontSize: "0.9rem", color: "#555", marginTop: 0 }}>
+        Check every correct answer (players must match all of them).
+      </p>
+      <label>Total penalty on wrong answer (optional)</label>
+      <p style={{ fontSize: "0.85rem", color: "#666", margin: "0 0 0.5rem" }}>
+        If you set a number, you can mark specific wrong answers below so that total is subtracted{" "}
+        <strong>once</strong> when the player is wrong and picked at least one of those answers.
+      </p>
+      <input
+        type="number"
+        min={0}
+        className="kh-input"
+        style={{ maxWidth: "8rem", marginBottom: "1rem" }}
+        value={penaltyTotalActive ? q.mcPenaltyPoints ?? "" : ""}
+        onChange={(e) => setMcPenaltyTotal(e.target.value)}
+      />
+      <label>Options (add as many as you like)</label>
+      {rows.map((row, i) => (
+        <div
+          key={i}
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.35rem",
+            marginBottom: "0.5rem",
+            alignItems: "center",
+          }}
+        >
+          <input
+            ref={(el) => {
+              optionTextRefs.current[i] = el;
+            }}
+            className="kh-input"
+            style={{ flex: "1 1 12rem", minWidth: "8rem" }}
+            value={row.text}
+            onChange={(e) => setOptionText(i, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Tab" || e.shiftKey || i !== rows.length - 1) return;
+              e.preventDefault();
+              const newIdx = rows.length;
+              focusOptionTextIndex.current = newIdx;
+              pushOptions([...rows, { text: `Option ${newIdx + 1}` }]);
+            }}
+          />
+          <label style={{ display: "flex", alignItems: "center", gap: "0.25rem", whiteSpace: "nowrap" }}>
+            <input type="checkbox" checked={correct.includes(i)} onChange={() => toggleCorrect(i)} />
+            correct
+          </label>
+          {penaltyTotalActive ? (
+            <label style={{ display: "flex", alignItems: "center", gap: "0.35rem", whiteSpace: "nowrap" }}>
+              <input
+                type="checkbox"
+                checked={!!row.penalizeIfWrong}
+                onChange={(e) => setOptionPenalize(i, e.target.checked)}
+              />
+              <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#555" }}>Trap (applies total)</span>
+            </label>
+          ) : null}
+          <button
+            type="button"
+            className="kh-btn kh-btn-danger kh-mc-opt-remove"
+            title={rows.length <= 2 ? "Need at least 2 options" : "Remove this option"}
+            disabled={rows.length <= 2}
+            onClick={() => removeOption(i)}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button type="button" className="kh-btn kh-btn-outline kh-btn-sm" style={{ marginTop: "0.25rem" }} onClick={addOption}>
+        + Add option
+      </button>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", marginTop: "0.85rem", cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={q.shuffleOptions !== false}
+          onChange={(e) => onChange({ shuffleOptions: e.target.checked })}
+          style={{ marginTop: "0.2rem" }}
+        />
+        <span>
+          <strong>Random order of answers</strong>
+          <span style={{ display: "block", fontSize: "0.88rem", color: "#555", fontWeight: 400 }}>
+            Each player sees the options shuffled (correct answer is still detected).
+          </span>
+        </span>
+      </label>
+    </>
+  );
+}
+
+function OrderEditor({
+  q,
+  onChange,
+}: {
+  q: Extract<QuizQuestion, { type: "order" }>;
+  onChange: (patch: Partial<QuizQuestion>) => void;
+}) {
+  const identityOrder = (items: string[]) => items.map((_, i) => i);
+
+  const setItemText = (index: number, text: string) => {
+    const items = q.items.map((t, j) => (j === index ? text : t));
+    onChange({ items, correctOrder: identityOrder(items) });
+  };
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= q.items.length) return;
+    const items = [...q.items];
+    const [row] = items.splice(from, 1);
+    items.splice(to, 0, row);
+    onChange({ items, correctOrder: identityOrder(items) });
+  };
+  const addItem = () => {
+    const items = [...q.items, `Item ${q.items.length + 1}`];
+    onChange({ items, correctOrder: identityOrder(items) });
+  };
+  const removeItem = (index: number) => {
+    if (q.items.length <= 2) return;
+    const items = q.items.filter((_, j) => j !== index);
+    onChange({ items, correctOrder: identityOrder(items) });
+  };
+
+  return (
+    <>
+      <p style={{ fontSize: "0.9rem", color: "#555", marginTop: 0 }}>
+        Top to bottom is the correct order. Players see items shuffled and put them in this order.
+      </p>
+      <div style={{ marginTop: "0.5rem" }}>
+        <span style={{ fontWeight: 600 }}>Items (reorder with arrows):</span>
+        <ul className="kh-order-edit">
+          {q.items.map((text, i) => (
+            <li key={i}>
+              <input
+                className="kh-input kh-order-edit-input"
+                value={text}
+                onChange={(e) => setItemText(i, e.target.value)}
+                aria-label={`Order item ${i + 1}`}
+              />
+              <span className="kh-order-edit-btns">
+                <button
+                  type="button"
+                  className="kh-btn kh-btn-outline kh-btn-sm"
+                  style={{ minWidth: "2.35rem" }}
+                  onClick={() => move(i, i - 1)}
+                  disabled={i === 0}
+                  title="Move up"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="kh-btn kh-btn-outline kh-btn-sm"
+                  style={{ minWidth: "2.35rem" }}
+                  onClick={() => move(i, i + 1)}
+                  disabled={i === q.items.length - 1}
+                  title="Move down"
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  className="kh-btn kh-btn-danger kh-btn-sm"
+                  title={q.items.length <= 2 ? "Need at least 2 items" : "Remove this item"}
+                  disabled={q.items.length <= 2}
+                  onClick={() => removeItem(i)}
+                >
+                  Remove
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <button type="button" className="kh-btn kh-btn-outline kh-btn-sm" style={{ marginTop: "0.35rem" }} onClick={addItem}>
+        + Add item
+      </button>
+    </>
+  );
+}
