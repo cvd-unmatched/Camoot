@@ -5,6 +5,13 @@
   padding: 0 0.5rem;
 }
 
+.qp-wrap,
+.qp-wrap * {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
 /* No opacity in animation: "both" fill was leaving hit-testing broken in some browsers */
 .qp-anim-in {
   animation: qp-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) forwards;
