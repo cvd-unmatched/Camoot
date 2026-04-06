@@ -431,6 +431,11 @@
   margin: 0 0 1rem;
 }
 
+/* Pointer-based reorder (touch): avoid fighting page scroll while dragging */
+.qp-order-list-is-dragging {
+  touch-action: none;
+}
+
 .qp-order-grip {
   opacity: 0.55;
   font-size: 0.9rem;
@@ -453,8 +458,13 @@
   transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
 }
 
-.qp-order-item[draggable="true"]:hover {
+.qp-order-item:hover {
   border-color: rgba(255, 255, 255, 0.35);
+}
+
+.qp-order-item-drop-target {
+  border-color: var(--camoot-yellow) !important;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
 }
 
 .qp-order-item-dragging {

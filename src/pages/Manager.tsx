@@ -29,6 +29,21 @@ function serializeMcOptions(rows: McOption[]): (string | McOption)[] {
   });
 }
 
+/** Same normalization as player taps (`QuestionPlayer` click_location). */
+function normalizedPointOnImage(
+  img: HTMLImageElement,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } | null {
+  const rect = img.getBoundingClientRect();
+  const rw = rect.width;
+  const rh = rect.height;
+  if (rw <= 0 || rh <= 0) return null;
+  const x = Math.min(1, Math.max(0, (clientX - rect.left) / rw));
+  const y = Math.min(1, Math.max(0, (clientY - rect.top) / rh));
+  return { x, y };
+}
+
 const TOKEN_KEY = "camoot_manager_token";
 /** Same key as Host page: set when starting live from Create so Host opens the lobby without a second login. */
 const HOST_MGR_TOKEN = "camoot_host_mgr_token";
@@ -46,7 +61,8 @@ const QUESTION_KIND: Record<QuizQuestion["type"], { label: string; tooltip: stri
   },
   click_location: {
     label: "Click",
-    tooltip: "Image tap: players tap somewhere on the picture; you define the correct circular region (normalized coordinates).",
+    tooltip:
+      "Image tap: players tap the picture where you placed the target. Click the preview image to set the spot and adjust the circle size for how precise they must be.",
   },
   order: {
     label: "Order",
@@ -594,6 +610,109 @@ function QuizEditor({
   );
 }
 
+function ClickLocationTargetEditor({
+  imageUrl,
+  correctRegion,
+  onRegionChange,
+}: {
+  imageUrl: string;
+  correctRegion: { x: number; y: number; radius?: number };
+  onRegionChange: (region: { x: number; y: number; radius?: number }) => void;
+}) {
+  const imgRef = useRef<HTMLImageElement>(null);
+  const radius = correctRegion.radius ?? 0.12;
+
+  const applyClientPoint = (clientX: number, clientY: number) => {
+    const img = imgRef.current;
+    if (!img) return;
+    const pt = normalizedPointOnImage(img, clientX, clientY);
+    if (!pt) return;
+    onRegionChange({ ...correctRegion, ...pt, radius });
+  };
+
+  return (
+    <>
+      <p style={{ fontSize: "0.88rem", color: "#555", margin: "0.5rem 0 0.75rem" }}>
+        Click or tap the image to place the correct spot (same coordinates players use when they tap). The circle shows
+        what counts as correct; widen or narrow it with the slider.
+      </p>
+      <div className="kh-mgr-click-loc-editor">
+        <div className="kh-mgr-click-loc-frame">
+          <img
+            ref={imgRef}
+            src={imageUrl}
+            alt=""
+            className="kh-mgr-click-loc-img"
+            draggable={false}
+          />
+          <svg
+            className="kh-mgr-click-loc-svg"
+            viewBox="0 0 1 1"
+            preserveAspectRatio="none"
+            aria-hidden
+          >
+            <circle
+              cx={correctRegion.x}
+              cy={correctRegion.y}
+              r={radius}
+              fill="rgba(245, 196, 0, 0.35)"
+              stroke="rgba(255, 255, 255, 0.95)"
+              strokeWidth={0.006}
+            />
+          </svg>
+          <div
+            className="kh-mgr-click-loc-hit"
+            role="application"
+            tabIndex={0}
+            aria-label="Click or tap on the image to set the correct tap target"
+            onPointerDown={(e) => {
+              if (e.pointerType === "mouse" && e.button !== 0) return;
+              e.preventDefault();
+              (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+              applyClientPoint(e.clientX, e.clientY);
+            }}
+            onPointerMove={(e) => {
+              if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+              applyClientPoint(e.clientX, e.clientY);
+            }}
+            onPointerUp={(e) => {
+              const el = e.currentTarget as HTMLDivElement;
+              if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+            }}
+            onPointerCancel={(e) => {
+              const el = e.currentTarget as HTMLDivElement;
+              if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+            }}
+          />
+        </div>
+      </div>
+      <label style={{ display: "block", marginTop: "0.75rem", fontWeight: 600 }}>
+        Tap tolerance (circle radius)
+      </label>
+      <input
+        type="range"
+        min={0.03}
+        max={0.35}
+        step={0.01}
+        value={radius}
+        onChange={(e) =>
+          onRegionChange({
+            ...correctRegion,
+            radius: Number(e.target.value),
+          })
+        }
+        className="kh-mgr-click-loc-radius"
+        aria-valuemin={0.03}
+        aria-valuemax={0.35}
+      />
+      <p style={{ fontSize: "0.82rem", color: "#666", margin: "0.25rem 0 0" }}>
+        Center ({correctRegion.x.toFixed(2)}, {correctRegion.y.toFixed(2)}) · radius {radius.toFixed(2)} — same units as
+        the game (0–1 across the image).
+      </p>
+    </>
+  );
+}
+
 function QuestionFields({
   question,
   token,
@@ -807,45 +926,17 @@ function QuestionFields({
               if (f) upload(f);
             }}
           />
-          <p style={{ fontSize: "0.85rem", color: "#666" }}>Target (0–1): center x, y, radius</p>
-          <div className="kh-row">
-            <label>x</label>
-            <input
-              type="number"
-              step="0.01"
-              className="kh-input"
-              value={question.correctRegion.x}
-              onChange={(e) =>
-                onChange({
-                  correctRegion: { ...question.correctRegion, x: Number(e.target.value) },
-                } as Partial<QuizQuestion>)
-              }
+          {question.imageUrl?.trim() ? (
+            <ClickLocationTargetEditor
+              imageUrl={question.imageUrl.trim()}
+              correctRegion={question.correctRegion}
+              onRegionChange={(correctRegion) => onChange({ correctRegion } as Partial<QuizQuestion>)}
             />
-            <label>y</label>
-            <input
-              type="number"
-              step="0.01"
-              className="kh-input"
-              value={question.correctRegion.y}
-              onChange={(e) =>
-                onChange({
-                  correctRegion: { ...question.correctRegion, y: Number(e.target.value) },
-                } as Partial<QuizQuestion>)
-              }
-            />
-            <label>r</label>
-            <input
-              type="number"
-              step="0.01"
-              className="kh-input"
-              value={question.correctRegion.radius ?? 0.1}
-              onChange={(e) =>
-                onChange({
-                  correctRegion: { ...question.correctRegion, radius: Number(e.target.value) },
-                } as Partial<QuizQuestion>)
-              }
-            />
-          </div>
+          ) : (
+            <p style={{ fontSize: "0.88rem", color: "#666", margin: "0.75rem 0 0" }}>
+              Add an image URL or upload a file, then click the preview to set where players should tap.
+            </p>
+          )}
         </>
       )}
       {question.type === "order" && <OrderEditor q={question} onChange={onChange} />}

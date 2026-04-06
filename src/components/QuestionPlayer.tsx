@@ -69,6 +69,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
   const answerSentRef = useRef(false);
   const uiTapSoundAtRef = useRef(0);
   const [draggingOid, setDraggingOid] = useState<number | null>(null);
+  /** Drop-row highlight while reordering with pointer (touch-friendly; HTML5 drag is disabled). */
+  const [orderDropHoverIdx, setOrderDropHoverIdx] = useState<number | null>(null);
+  const orderListRef = useRef<HTMLUListElement>(null);
+  const orderPtrDragRef = useRef<{ pointerId: number; fromIdx: number } | null>(null);
   const [matchPairs, setMatchPairs] = useState<Map<number, number>>(new Map());
   const [matchPendingLeft, setMatchPendingLeft] = useState<number | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -162,6 +166,12 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     const next = idsPart ? idsPart.split(",").map(Number).filter((n) => !Number.isNaN(n)) : [];
     orderIdsRef.current = next;
     setOrderIds(next);
+  }, [orderResetKey]);
+
+  useEffect(() => {
+    orderPtrDragRef.current = null;
+    setDraggingOid(null);
+    setOrderDropHoverIdx(null);
   }, [orderResetKey]);
 
   const mcResetKey =
@@ -764,48 +774,94 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       playUiTapSound();
     };
 
-    const onDragStart = (oid: number) => (e: React.DragEvent) => {
-      if (disabled) return;
-      e.dataTransfer.setData("text/plain", String(oid));
-      e.dataTransfer.effectAllowed = "move";
-      setDraggingOid(oid);
+    const rowIndexAtClientY = (clientY: number) => {
+      const root = orderListRef.current;
+      if (!root) return 0;
+      const lis = root.querySelectorAll<HTMLLIElement>(":scope > li");
+      if (lis.length === 0) return 0;
+      for (let i = 0; i < lis.length; i++) {
+        const r = lis[i].getBoundingClientRect();
+        if (clientY < r.top + r.height / 2) return i;
+      }
+      return lis.length - 1;
     };
 
-    const onDragEnd = () => setDraggingOid(null);
-
-    const onDragOver = (e: React.DragEvent) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-    };
-
-    const onDrop = (targetIdx: number) => (e: React.DragEvent) => {
-      e.preventDefault();
-      const fromOid = Number(e.dataTransfer.getData("text/plain"));
+    const endOrderPointerDrag = (e: React.PointerEvent<HTMLLIElement>, rowEl: HTMLLIElement) => {
+      const d = orderPtrDragRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+      orderPtrDragRef.current = null;
+      try {
+        rowEl.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      const toIdx = rowIndexAtClientY(e.clientY);
       setDraggingOid(null);
-      if (Number.isNaN(fromOid)) return;
-      const fromIdx = orderIds.indexOf(fromOid);
-      if (fromIdx < 0 || fromIdx === targetIdx) return;
-      move(fromIdx, targetIdx);
+      setOrderDropHoverIdx(null);
+      if (toIdx !== d.fromIdx) move(d.fromIdx, toIdx);
+    };
+
+    const onOrderRowPointerDown = (idx: number, oid: number) => (e: React.PointerEvent<HTMLLIElement>) => {
+      if (disabled) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const t = e.target as HTMLElement;
+      if (t.closest(".qp-order-actions")) return;
+      if (e.pointerType === "touch" || e.pointerType === "pen") e.preventDefault();
+      orderPtrDragRef.current = { pointerId: e.pointerId, fromIdx: idx };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setDraggingOid(oid);
+      setOrderDropHoverIdx(idx);
+      camootLog("qp", "order pointer drag start", { idx, oid, pointerType: e.pointerType });
+    };
+
+    const onOrderRowPointerMove = (e: React.PointerEvent<HTMLLIElement>) => {
+      const d = orderPtrDragRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+      setOrderDropHoverIdx(rowIndexAtClientY(e.clientY));
+    };
+
+    const onOrderRowPointerUp = (e: React.PointerEvent<HTMLLIElement>) => {
+      endOrderPointerDrag(e, e.currentTarget);
+    };
+
+    const onOrderRowPointerCancel = (e: React.PointerEvent<HTMLLIElement>) => {
+      const d = orderPtrDragRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+      orderPtrDragRef.current = null;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ok */
+      }
+      setDraggingOid(null);
+      setOrderDropHoverIdx(null);
     };
 
     return (
       <div className={qpWrapClass}>
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
-        <p className="qp-hint">Drag rows to order (top = first). Arrows still work.</p>
-        <ul className="qp-order-list">
+        <p className="qp-hint">
+          Drag a row to reorder (top = first). On your phone, drag the row right away — no long-press. ↑ ↓ work too.
+        </p>
+        <ul
+          ref={orderListRef}
+          className={"qp-order-list" + (draggingOid !== null ? " qp-order-list-is-dragging" : "")}
+        >
           {orderIds.map((oid, idx) => (
             <li
               key={oid}
               className={
                 "qp-order-item" +
-                (draggingOid === oid ? " qp-order-item-dragging" : "")
+                (draggingOid === oid ? " qp-order-item-dragging" : "") +
+                (orderDropHoverIdx === idx && draggingOid !== null && draggingOid !== oid
+                  ? " qp-order-item-drop-target"
+                  : "")
               }
-              draggable={!disabled}
-              onDragStart={onDragStart(oid)}
-              onDragEnd={onDragEnd}
-              onDragOver={onDragOver}
-              onDrop={onDrop(idx)}
+              onPointerDown={onOrderRowPointerDown(idx, oid)}
+              onPointerMove={onOrderRowPointerMove}
+              onPointerUp={onOrderRowPointerUp}
+              onPointerCancel={onOrderRowPointerCancel}
             >
               <span className="qp-order-grip" aria-hidden>
                 ⋮⋮

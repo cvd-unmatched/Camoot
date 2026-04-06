@@ -952,6 +952,56 @@ button {
   pointer-events: none;
 }
 
+.kh-mgr-click-loc-editor {
+  margin-top: 0.75rem;
+  max-width: 100%;
+}
+
+.kh-mgr-click-loc-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.kh-mgr-click-loc-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.kh-mgr-click-loc-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.kh-mgr-click-loc-hit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+  box-sizing: border-box;
+}
+
+.kh-mgr-click-loc-radius {
+  display: block;
+  width: 100%;
+  max-width: 22rem;
+  margin-top: 0.35rem;
+}
+
 .kh-host-lb {
   font-size: 1.1rem;
   font-weight: 600;
