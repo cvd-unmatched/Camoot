@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
 /** Same-origin `/api` during dev & preview: always forward to the Node server (PORT default 3001). */
@@ -9,34 +9,51 @@ const apiProxy = {
 };
 
 /**
- * Cloudflare Rocket Loader rewrites/defers `<script type="module" src="...">` and often prevents React from mounting.
- * Bootstrap with a classic script (`data-cfasync="false"`) that dynamically `import()`s the real entry — CF leaves that alone.
+ * Cloudflare Rocket Loader breaks many SPA setups. We:
+ * 1) Remove the default `<script type="module" src="...">` from the document.
+ * 2) Append a classic `data-cfasync="false"` bootstrap at the **end of body** so `#root` exists and CSS from `<head>` can load first.
  */
 function cloudflareFriendlyEntryBootstrap() {
   return {
     name: "cloudflare-friendly-entry",
     enforce: "post" as const,
     transformIndexHtml(html: string) {
-      return html.replace(/<script\b[^>]*\btype="module"[^>]*><\/script>/gi, (tag) => {
+      const moduleRe = /<script\b[^>]*\btype="module"[^>]*><\/script>/gi;
+      let entry = "";
+      let out = html.replace(moduleRe, (tag) => {
         const m = tag.match(/\bsrc="([^"]+)"/);
-        if (!m) return tag;
-        const url = JSON.stringify(m[1]);
-        return (
-          `<script data-cfasync="false">` +
-          `(function(){var u=${url};import(u).catch(function(e){` +
-          `console.error(e);var r=document.getElementById("root");if(!r)return;` +
-          `var p=document.createElement("p");` +
-          `p.style.cssText="margin:0;padding:2rem 1.25rem;font:600 0.9rem system-ui,sans-serif;color:#ffc9c9;text-align:center;max-width:28rem;margin-inline:auto";` +
-          `p.textContent="Could not load Camoot. Check your connection; if you use Cloudflare, turn off Rocket Loader (Speed \\u2192 Optimization).";` +
-          `r.replaceChildren(p);});})();` +
-          `<\/script>`
-        );
+        if (m) entry = m[1];
+        return "";
       });
+      if (!entry) return html;
+
+      const u = JSON.stringify(entry);
+      const boot =
+        `<script data-cfasync="false">` +
+        `(function(){var u=${u};import(u).catch(function(e){` +
+        `console.error(e);var r=document.getElementById("root");if(!r)return;` +
+        `var p=document.createElement("p");` +
+        `p.style.cssText="margin:0;padding:2rem 1rem;font:600 1rem system-ui,sans-serif;color:#fff;text-align:center;max-width:28rem;margin-inline:auto;text-shadow:0 1px 4px rgba(0,0,0,.75)";` +
+        `p.textContent="Could not load Camoot (offline or blocked script). With Cloudflare: Speed \\u2192 Optimization \\u2192 Rocket Loader off.";` +
+        `r.replaceChildren(p);});})();` +
+        `<\/script>`;
+
+      out = out.replace(/<\/body>/i, (m) => boot + "\n" + m);
+
+      return out;
     },
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const v = String(env.LOGGING ?? env.VITE_LOGGING ?? "").trim().toLowerCase();
+  const camootLog = v === "true" || v === "1" || v === "yes";
+
+  return {
+  define: {
+    __CAMOOT_LOG__: JSON.stringify(camootLog),
+  },
   plugins: [react(), cloudflareFriendlyEntryBootstrap()],
   server: {
     port: 5173,
@@ -54,4 +71,5 @@ export default defineConfig({
   build: {
     outDir: "dist",
   },
+};
 });

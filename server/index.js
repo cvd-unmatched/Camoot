@@ -12,6 +12,7 @@ import QRCode from "qrcode";
 import { v4 as uuidv4 } from "uuid";
 import * as quizStore from "./quizStore.js";
 import * as gameManager from "./gameManager.js";
+import { log, logWarn, logLoggingStatus } from "./log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -19,6 +20,8 @@ const UPLOAD_DIR = path.join(ROOT, "data", "uploads");
 const MANAGER_PASSWORD = process.env.MANAGER_PASSWORD || "camoot123";
 const JOIN_BASE_URL = process.env.JOIN_BASE_URL || "";
 const PORT = Number(process.env.PORT) || 3001;
+
+logLoggingStatus();
 
 const managerSessions = new Map();
 
@@ -199,9 +202,12 @@ app.delete("/api/admin/sessions/:pin", requireManager, (req, res) => {
 });
 
 io.on("connection", (socket) => {
+  log("io", "connect", socket.id);
+
   socket.on("host_join", ({ pin, hostToken }) => {
     const game = gameManager.getGameByPin(pin);
     if (!game || game.hostToken !== hostToken) {
+      logWarn("host_join", "reject", { pin, reason: "invalid credentials" });
       socket.emit("error", { message: "Invalid host credentials" });
       return;
     }
@@ -209,12 +215,14 @@ io.on("connection", (socket) => {
     socket.data.role = "host";
     socket.data.pin = pin;
     socket.data.hostToken = hostToken;
+    log("host_join", "ok", { pin, socketId: socket.id });
     socket.emit("state", gameManager.getPublicGameState(game, true));
   });
 
   socket.on("player_join", ({ pin, username, playerId }) => {
     const game = gameManager.getGameByPin(pin);
     if (!game) {
+      logWarn("player_join", "reject game not found", { pin, username, socketId: socket.id });
       socket.emit("error", { message: "Game not found" });
       return;
     }
@@ -228,18 +236,27 @@ io.on("connection", (socket) => {
       socket.data.role = "player";
       socket.data.pin = pin;
       socket.data.playerId = player.id;
+      log("player_join", "reconnect", {
+        pin,
+        playerId: player.id,
+        phase: game.phase,
+        qIndex: game.questionIndex,
+        socketId: socket.id,
+      });
       socket.emit("joined", { playerId: player.id, pin: game.pin });
       broadcastGame(game);
       return;
     }
 
     if (game.phase !== "lobby") {
+      logWarn("player_join", "reject not lobby", { pin, phase: game.phase, username, socketId: socket.id });
       socket.emit("error", { message: "Game already started. Only returning players can rejoin." });
       return;
     }
 
     const name = String(username || "Player").trim() || "Player";
     if (gameManager.isLobbyNameTaken(game, name)) {
+      logWarn("player_join", "reject name taken", { pin, name, socketId: socket.id });
       socket.emit("error", { message: "That name is already taken in this lobby. Choose another." });
       return;
     }
@@ -248,6 +265,7 @@ io.on("connection", (socket) => {
     socket.data.role = "player";
     socket.data.pin = pin;
     socket.data.playerId = player.id;
+    log("player_join", "new player", { pin, name, playerId: player.id, socketId: socket.id });
     socket.emit("joined", { playerId: player.id, pin: game.pin });
     broadcastGame(game);
   });
@@ -328,6 +346,7 @@ io.on("connection", (socket) => {
       socket.emit("error", { message: "Wait for at least one player to join before starting." });
       return;
     }
+    log("host_start", game.pin, { players: game.players.size });
     clearQuestionDeadline(game.pin);
     const snap = game.quizSnapshot;
     const qs = snap.questions;
@@ -350,6 +369,7 @@ io.on("connection", (socket) => {
     const game = gameManager.getGameByPin(socket.data.pin);
     if (!game || socket.data.role !== "host") return;
     if (game.hostToken !== socket.data.hostToken) return;
+    log("host_next", game.pin, { from: game.phase, qIndex: game.questionIndex });
     const qs = game.quizSnapshot.questions || [];
     clearQuestionDeadline(game.pin);
     if (game.phase === "question") {
@@ -387,15 +407,30 @@ io.on("connection", (socket) => {
   socket.on("player_answer", ({ answer, questionIndex, clientTime }) => {
     const pin = socket.data.pin;
     const playerId = socket.data.playerId;
-    if (!pin || !playerId || socket.data.role !== "player") return;
+    if (!pin || !playerId || socket.data.role !== "player") {
+      logWarn("player_answer", "ignored bad socket data", { pin, playerId, role: socket.data.role });
+      return;
+    }
     const game = gameManager.getGameByPin(pin);
-    if (!game || game.phase !== "question") return;
-    if (game.questionIndex !== questionIndex) return;
+    if (!game || game.phase !== "question") {
+      logWarn("player_answer", "ignored wrong phase", { pin, phase: game?.phase, playerId });
+      return;
+    }
+    if (game.questionIndex !== questionIndex) {
+      logWarn("player_answer", "ignored q index mismatch", {
+        pin,
+        playerId,
+        expected: game.questionIndex,
+        got: questionIndex,
+      });
+      return;
+    }
     if (game.answers.has(playerId)) return;
 
     const elapsed = Math.max(0, Date.now() - (game.startedAt || Date.now()));
     gameManager.recordAnswer(game, playerId, { answer, clientTime });
     const result = gameManager.gradeAnswer(game, playerId, answer, elapsed);
+    log("player_answer", pin, { playerId, questionIndex, correct: result.correct, points: result.points });
     socket.emit("answer_result", { ...result, questionIndex });
     if (gameManager.allActivePlayersAnswered(game)) {
       clearQuestionDeadline(pin);
@@ -404,7 +439,8 @@ io.on("connection", (socket) => {
     broadcastGame(game);
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", (reason) => {
+    log("io", "disconnect", socket.id, reason, { role: socket.data.role, pin: socket.data.pin });
     const pin = socket.data.pin;
     if (!pin) return;
     const game = gameManager.getGameByPin(pin);

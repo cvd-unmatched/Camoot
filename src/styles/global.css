@@ -107,6 +107,14 @@ button {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .kh-card {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .kh-btn {
   display: inline-flex;
   align-items: center;
@@ -259,9 +267,15 @@ button {
 .kh-page.kh-page-play-join {
   position: relative;
   z-index: 1;
+  isolation: isolate;
   box-sizing: border-box;
   min-height: 100dvh;
   padding: max(1rem, env(safe-area-inset-top, 0px)) 1rem max(1.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+.kh-page.kh-page-play-join .kh-card {
+  position: relative;
+  z-index: 2;
 }
 
 @supports (-webkit-touch-callout: none) {

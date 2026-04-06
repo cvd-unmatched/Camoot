@@ -5,6 +5,7 @@ import Manager from "./pages/Manager";
 import Host from "./pages/Host";
 import Play from "./pages/Play";
 import Admin from "./pages/Admin";
+import RouteErrorBoundary from "./RouteErrorBoundary";
 
 export default function App() {
   return (
@@ -14,7 +15,14 @@ export default function App() {
         <Route path="/create" element={<Manager />} />
         <Route path="/manager" element={<Navigate to="/create" replace />} />
         <Route path="/host" element={<Host />} />
-        <Route path="/play" element={<Play />} />
+        <Route
+          path="/play"
+          element={
+            <RouteErrorBoundary>
+              <Play />
+            </RouteErrorBoundary>
+          }
+        />
         <Route path="/admin" element={<Admin />} />
         <Route
           path="*"

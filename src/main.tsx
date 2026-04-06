@@ -3,6 +3,9 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles/global.css";
+import { camootLog } from "./log";
+
+camootLog("boot", "main.tsx", { href: typeof window !== "undefined" ? window.location.href : "" });
 
 const rootEl = document.getElementById("root");
 if (!rootEl) {

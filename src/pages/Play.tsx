@@ -7,6 +7,7 @@ import QuestionPlayer, {
 } from "../components/QuestionPlayer";
 import { getSocket } from "../socket";
 import { playCorrect, playSubmit, playWrong, playYouJoined, resumeSounds } from "../sounds";
+import { camootLog, camootWarn } from "../log";
 import type { GameState } from "../types";
 
 function formatPlayerAnswerForReveal(
@@ -120,8 +121,36 @@ export default function Play() {
   const pendingNameRef = useRef("");
 
   useEffect(() => {
+    camootLog("play", "mount", {
+      href: window.location.href,
+      pinFromUrl: pinParam || "(none)",
+      pinField: pin,
+    });
+  }, [pinParam, pin]);
+
+  useEffect(() => {
+    const s = getSocket();
+    const onConnect = () => camootLog("play", "socket connect", { id: s.id });
+    const onConnectErr = (err: Error) =>
+      camootWarn("play", "socket connect_error", err?.message || String(err));
+    s.on("connect", onConnect);
+    s.on("connect_error", onConnectErr);
+    return () => {
+      s.off("connect", onConnect);
+      s.off("connect_error", onConnectErr);
+    };
+  }, []);
+
+  useEffect(() => {
     const s = getSocket();
     const onState = (st: GameState) => {
+      camootLog("play", "state", {
+        phase: st.phase,
+        pin: st.pin,
+        questionIndex: st.questionIndex,
+        playerCount: st.players.length,
+        hasQuestion: !!st.question,
+      });
       setState(st);
       const stored = loadStoredSession();
       if (
@@ -143,6 +172,7 @@ export default function Play() {
       }
     };
     const onJoined = (p: { playerId: string; pin: string }) => {
+      camootLog("play", "joined", p);
       playYouJoined();
       setPlayerId(p.playerId);
       setJoined(true);
@@ -161,10 +191,12 @@ export default function Play() {
       );
     };
     const onErr = (e: { message?: string }) => {
+      camootWarn("play", "server error event", e);
       setError(e.message || "Error");
       setReconnecting(false);
     };
     const onResult = (r: { points: number; correct: boolean; penalty?: number }) => {
+      camootLog("play", "answer_result", r);
       setAnswered(true);
       setLastCorrect(r.correct);
       if (r.correct) {
@@ -176,6 +208,7 @@ export default function Play() {
       }
     };
     const onSessionEnded = (e: { message?: string }) => {
+      camootLog("play", "session_ended", e);
       setState(null);
       setJoined(false);
       setPlayerId(null);
@@ -185,6 +218,7 @@ export default function Play() {
       setReconnecting(false);
     };
     const onKicked = (_e: { message?: string }) => {
+      camootWarn("play", "kicked", _e);
       setState(null);
       setJoined(false);
       setPlayerId(null);
@@ -221,7 +255,7 @@ export default function Play() {
     resumeSounds();
     if (lastCorrect) playCorrect();
     else playWrong();
-  }, [state, state.phase, state.pin, state.questionIndex, answered, lastCorrect]);
+  }, [state?.phase, state?.pin, state?.questionIndex, answered, lastCorrect, state]);
 
   useEffect(() => {
     const s = getSocket();
@@ -270,6 +304,11 @@ export default function Play() {
     const s = getSocket();
     const stored = loadStoredSession();
     const sameSession = stored && normalizePin(stored.pin) === clean && stored.playerId;
+    camootLog("play", "emit player_join", {
+      pin: clean,
+      username: name,
+      reusingPlayerId: !!sameSession,
+    });
     s.emit("player_join", {
       pin: clean,
       username: name,
@@ -305,7 +344,15 @@ export default function Play() {
           <div className="kh-nav-home-wrap">
             <NavHome label="Back to home" />
           </div>
-          <div className="kh-card">
+          <div
+            className="kh-card"
+            style={{
+              background: "rgba(255, 255, 255, 0.98)",
+              color: "#1a1a1a",
+              boxShadow:
+                "0 12px 40px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.12) inset",
+            }}
+          >
           <h1 style={{ marginTop: 0, color: "var(--camoot-purple)" }}>Join game</h1>
           {reconnecting && (
             <p style={{ fontWeight: 600, color: "var(--camoot-blue)" }}>Reconnecting…</p>
@@ -490,12 +537,12 @@ export default function Play() {
               The different color was square {(r.correctIndex as number) + 1}.
             </p>
           )}
-          {r?.explanation && typeof r.explanation === "string" && (
+          {typeof r?.explanation === "string" && r.explanation.trim() !== "" ? (
             <div className="kh-reveal-explanation">
               <strong>Why?</strong>
               <p>{r.explanation}</p>
             </div>
-          )}
+          ) : null}
           <h3 className="kh-lb-title" style={{ margin: "1.35rem 0 0.35rem" }}>
             Leaderboard
           </h3>
