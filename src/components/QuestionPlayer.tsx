@@ -5,6 +5,15 @@ import "./QuestionPlayer.css";
 
 const COLORS = ["#e21b3c", "#1368ce", "#f5c400", "#26890c", "#0aa3a3", "#864cbf", "#d45400", "#b23aee"];
 
+/** Touch/pen: run on pointerdown and preventDefault so the delayed synthetic click does not drop or double the action. Mouse uses onClick only (this handler skips mouse). */
+function onTouchOrPenPointerDown(e: React.PointerEvent, action: () => void) {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (e.pointerType === "touch" || e.pointerType === "pen") {
+    e.preventDefault();
+    action();
+  }
+}
+
 export function normalizeMcDisplayOptions(q: Record<string, unknown>): { id: number; text: string }[] {
   const raw = q.options;
   if (!Array.isArray(raw) || raw.length === 0) return [];
@@ -186,11 +195,12 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
   if (!q) return null;
 
   const qt = (q as { type: string }).type;
+  const qpWrapClass = "qp-wrap qp-anim-in" + (disabled ? " qp-locked" : "");
 
   if (qt === "odd_color_out") {
     const swatches =
       (q as { swatches?: { index: number; color: string }[] }).swatches || [];
-    const onPick = (index: number) => {
+    const onOddPick = (index: number) => {
       if (disabled) return;
       setOddPicked(index);
       playClick();
@@ -198,26 +208,49 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       onSubmit(index);
     };
     return (
-      <div className="qp-wrap qp-anim-in">
+      <div className={qpWrapClass}>
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
         <p className="qp-hint">Tap the square that is not the same color as the other three.</p>
-        <div className="qp-odd-grid" role="group" aria-label="Four color squares">
-          {swatches.map((s) => (
-            <button
-              key={s.index}
-              type="button"
-              className={
-                "qp-odd-cell" +
-                (oddPicked === s.index ? " qp-odd-cell-picked" : "")
-              }
-              style={{ backgroundColor: s.color }}
-              disabled={disabled}
-              aria-label={`Square ${s.index + 1}`}
-              onClick={() => onPick(s.index)}
-            />
-          ))}
+        <div
+          className={"qp-odd-grid" + (disabled ? " qp-odd-grid-locked" : "")}
+          role="group"
+          aria-label="Four color squares"
+        >
+          {swatches.map((s) => {
+            const picked = oddPicked === s.index;
+            return (
+              <button
+                key={s.index}
+                type="button"
+                className={"qp-odd-cell" + (picked ? " qp-odd-cell-picked" : "")}
+                style={{ backgroundColor: s.color }}
+                disabled={disabled}
+                aria-label={`Square ${s.index + 1}`}
+                aria-pressed={picked}
+                onPointerDown={(e) => {
+                  if (disabled) return;
+                  onTouchOrPenPointerDown(e, () => onOddPick(s.index));
+                }}
+                onClick={() => onOddPick(s.index)}
+              >
+                <span className="qp-odd-cell-num" aria-hidden>
+                  {s.index + 1}
+                </span>
+                {picked ? (
+                  <span className="qp-odd-cell-check" aria-hidden>
+                    ✓
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
+        {oddPicked !== null && (
+          <p className="qp-odd-sent" role="status">
+            Square {oddPicked + 1} — answer sent
+          </p>
+        )}
       </div>
     );
   }
@@ -250,7 +283,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     };
     const mcImageUrl = (q as { imageUrl?: string }).imageUrl;
     return (
-      <div className="qp-wrap qp-anim-in">
+      <div className={qpWrapClass}>
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
         {typeof mcImageUrl === "string" && mcImageUrl.trim() !== "" ? (
@@ -263,11 +296,12 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
         ) : (
           <p className="qp-mc-hint">Choose an answer, then tap Submit (or wait: your choice sends when time runs out).</p>
         )}
-        <div className="qp-mc-grid">
+        <div className={"qp-mc-grid" + (disabled ? " qp-mc-grid-locked" : "")}>
           {options.map((opt, displayIndex) => {
             const isChosen = multiSelect
               ? mcSelected.includes(opt.id)
               : singlePickedId === opt.id;
+            const pickOpt = () => (multiSelect ? toggleMc(opt.id) : pickSingleMc(opt.id));
             return (
               <button
                 key={opt.id}
@@ -275,7 +309,11 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                 className={"qp-mc-btn" + (isChosen ? " qp-mc-btn-selected" : "")}
                 style={{ background: COLORS[displayIndex % COLORS.length] }}
                 disabled={disabled}
-                onClick={() => (multiSelect ? toggleMc(opt.id) : pickSingleMc(opt.id))}
+                onPointerDown={(e) => {
+                  if (disabled) return;
+                  onTouchOrPenPointerDown(e, pickOpt);
+                }}
+                onClick={pickOpt}
               >
                 <span className={"qp-shape" + (isChosen ? " qp-shape-checked" : "")} aria-hidden />
                 {opt.text}
@@ -288,6 +326,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             type="button"
             className="kh-btn kh-btn-primary qp-submit"
             disabled={disabled || mcSelected.length === 0}
+            onPointerDown={(e) => {
+              if (disabled || mcSelected.length === 0) return;
+              onTouchOrPenPointerDown(e, submitMc);
+            }}
             onClick={submitMc}
           >
             Submit answer
@@ -297,6 +339,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             type="button"
             className="kh-btn kh-btn-primary qp-submit"
             disabled={disabled || singlePickedId === null}
+            onPointerDown={(e) => {
+              if (disabled || singlePickedId === null) return;
+              onTouchOrPenPointerDown(e, submitSingleMc);
+            }}
             onClick={submitSingleMc}
           >
             Submit answer
@@ -312,13 +358,13 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     const step = Number((q as { step?: number }).step ?? 1);
     const val = sliderVal ?? Math.round((min + max) / 2);
     return (
-      <div className="qp-wrap qp-anim-in">
+      <div className={qpWrapClass}>
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
         <p className="qp-slider-range-hint">
           Slide between <strong>{min}</strong> and <strong>{max}</strong>, then lock in your answer.
         </p>
-        <div className="qp-slider-box">
+        <div className={"qp-slider-box" + (disabled ? " qp-slider-box-locked" : "")}>
           <div className="qp-slider-scale">
             <span>{min}</span>
             <span>{max}</span>
@@ -331,6 +377,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             value={val}
             disabled={disabled}
             onChange={(e) => setSliderVal(Number(e.target.value))}
+            onInput={(e) => setSliderVal(Number((e.target as React.FormEvent<HTMLInputElement>).currentTarget.value))}
             className="qp-range"
           />
           <div className="qp-slider-val">{val}</div>
@@ -338,6 +385,13 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             type="button"
             className="kh-btn kh-btn-primary qp-submit"
             disabled={disabled}
+            onPointerDown={(e) => {
+              if (disabled) return;
+              onTouchOrPenPointerDown(e, () => {
+                playSubmit();
+                onSubmit(val);
+              });
+            }}
             onClick={() => {
               playSubmit();
               onSubmit(val);
@@ -352,20 +406,35 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
 
   if (qt === "click_location") {
     const url = String((q as { imageUrl: string }).imageUrl || "");
-    const onImgClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const submitImgPt = (clientX: number, clientY: number) => {
       if (disabled || !imgRef.current) return;
       playClick();
       const rect = imgRef.current.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const y = (e.clientY - rect.top) / rect.height;
+      const rw = rect.width;
+      const rh = rect.height;
+      if (rw <= 0 || rh <= 0) return;
+      const x = (clientX - rect.left) / rw;
+      const y = (clientY - rect.top) / rh;
       onSubmit({ x, y });
     };
+    const onImgClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      submitImgPt(e.clientX, e.clientY);
+    };
     return (
-      <div className="qp-wrap qp-anim-in">
+      <div className={qpWrapClass}>
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
         <p className="qp-hint">Tap the correct spot on the image.</p>
-        <div className="qp-click" onClick={onImgClick} role="presentation">
+        <div
+          className="qp-click"
+          onPointerDown={(e) => {
+            if (disabled) return;
+            if (e.pointerType === "mouse" && e.button !== 0) return;
+            onTouchOrPenPointerDown(e, () => submitImgPt(e.clientX, e.clientY));
+          }}
+          onClick={onImgClick}
+          role="presentation"
+        >
           {url ? (
             <img ref={imgRef} src={url} alt="" className="qp-click-img" draggable={false} />
           ) : (
@@ -435,6 +504,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       paired: boolean
     ) => {
       const url = row.imageUrl?.trim();
+      const matchTap = () => (side === "L" ? onLeftTap(row.id) : onRightTap(row.id));
       return (
         <button
           key={`${side}-${row.id}`}
@@ -446,7 +516,11 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           }
           style={{ borderColor: paired || active ? COLORS[row.id % COLORS.length] : undefined }}
           disabled={disabled}
-          onClick={() => (side === "L" ? onLeftTap(row.id) : onRightTap(row.id))}
+          onPointerDown={(e) => {
+            if (disabled) return;
+            onTouchOrPenPointerDown(e, matchTap);
+          }}
+          onClick={matchTap}
         >
           {url ? <img src={url} alt="" className="qp-match-img" draggable={false} /> : null}
           <span className="qp-match-text">{row.text || (url ? " " : "-")}</span>
@@ -454,7 +528,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       );
     };
     return (
-      <div className="qp-wrap qp-anim-in">
+      <div className={qpWrapClass}>
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
         <p className="qp-hint">Tap one item on the left, then its match on the right. Tap a paired left card to undo.</p>
@@ -494,6 +568,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                             : undefined,
                       }}
                       disabled={disabled || !canTapRight}
+                      onPointerDown={(e) => {
+                        if (disabled || !canTapRight) return;
+                        onTouchOrPenPointerDown(e, () => onRightTap(row.id));
+                      }}
                       onClick={() => onRightTap(row.id)}
                     >
                       {row.imageUrl?.trim() ? (
@@ -510,6 +588,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           type="button"
           className="kh-btn kh-btn-primary qp-submit"
           disabled={disabled || !complete}
+          onPointerDown={(e) => {
+            if (disabled || !complete) return;
+            onTouchOrPenPointerDown(e, submitMatch);
+          }}
           onClick={submitMatch}
         >
           Submit matches
@@ -559,7 +641,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     };
 
     return (
-      <div className="qp-wrap qp-anim-in">
+      <div className={qpWrapClass}>
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
         <p className="qp-hint">Drag rows to order (top = first). Arrows still work.</p>
@@ -582,10 +664,26 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
               </span>
               <span className="qp-order-text">{byId.get(oid)}</span>
               <span className="qp-order-actions">
-                <button type="button" disabled={disabled || idx === 0} onClick={() => move(idx, idx - 1)}>
+                <button
+                  type="button"
+                  disabled={disabled || idx === 0}
+                  onPointerDown={(e) => {
+                    if (disabled || idx === 0) return;
+                    onTouchOrPenPointerDown(e, () => move(idx, idx - 1));
+                  }}
+                  onClick={() => move(idx, idx - 1)}
+                >
                   ↑
                 </button>
-                <button type="button" disabled={disabled || idx === orderIds.length - 1} onClick={() => move(idx, idx + 1)}>
+                <button
+                  type="button"
+                  disabled={disabled || idx === orderIds.length - 1}
+                  onPointerDown={(e) => {
+                    if (disabled || idx === orderIds.length - 1) return;
+                    onTouchOrPenPointerDown(e, () => move(idx, idx + 1));
+                  }}
+                  onClick={() => move(idx, idx + 1)}
+                >
                   ↓
                 </button>
               </span>
@@ -596,6 +694,13 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           type="button"
           className="kh-btn kh-btn-primary qp-submit"
           disabled={disabled}
+          onPointerDown={(e) => {
+            if (disabled) return;
+            onTouchOrPenPointerDown(e, () => {
+              playSubmit();
+              onSubmit(orderIds);
+            });
+          }}
           onClick={() => {
             playSubmit();
             onSubmit(orderIds);

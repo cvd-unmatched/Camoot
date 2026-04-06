@@ -157,7 +157,9 @@ function scheduleQuestionDeadline(pin) {
   if (!game || game.phase !== "question") return;
   const qs = game.quizSnapshot.questions || [];
   const q = qs[game.questionIndex];
-  const ms = Math.max(500, (q?.timeLimitSec ?? 20) * 1000);
+  /** Small cushion so mobile taps / in-flight player_answer packets are not rejected while phase flips to reveal. */
+  const REVEAL_GRACE_MS = 220;
+  const ms = Math.max(500, (q?.timeLimitSec ?? 20) * 1000) + REVEAL_GRACE_MS;
   const idx = game.questionIndex;
   const t = setTimeout(() => {
     autoRevealTimers.delete(pin);
