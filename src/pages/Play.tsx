@@ -300,7 +300,7 @@ export default function Play() {
 
   if (!joined || !state) {
     return (
-      <div className="kh-page">
+      <div className="kh-page kh-page-play-join">
         <div className="kh-page-narrow-sm">
           <div className="kh-nav-home-wrap">
             <NavHome label="Back to home" />

@@ -17,12 +17,8 @@ body:has(.home-page) {
   }
 }
 
-body:has(.home-page) {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  touch-action: manipulation;
-}
+/* Avoid `position: fixed` on body: on some mobile WebKit builds `:has(.home-page)` updates
+   late after navigating away, leaving the viewport stuck and hiding /play (e.g. after QR). */
 
 #root:has(.home-page) {
   height: 100%;
@@ -56,6 +52,7 @@ body:has(.home-page) {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  touch-action: manipulation;
 }
 
 .home-root {
