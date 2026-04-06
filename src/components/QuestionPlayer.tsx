@@ -1,14 +1,26 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GameState } from "../types";
+import { camootLog } from "../log";
 import { playClick, playSubmit, playTick } from "../sounds";
 import "./QuestionPlayer.css";
 
 const COLORS = ["#e21b3c", "#1368ce", "#f5c400", "#26890c", "#0aa3a3", "#864cbf", "#d45400", "#b23aee"];
 
 /** Touch/pen: run on pointerdown and preventDefault so the delayed synthetic click does not drop or double the action. Mouse uses onClick only (this handler skips mouse). */
-function onTouchOrPenPointerDown(e: React.PointerEvent, action: () => void) {
+function onTouchOrPenPointerDown(
+  e: React.PointerEvent,
+  action: () => void,
+  debugLabel?: string,
+) {
   if (e.pointerType === "mouse" && e.button !== 0) return;
   if (e.pointerType === "touch" || e.pointerType === "pen") {
+    if (debugLabel) {
+      camootLog("qp-touch", debugLabel, {
+        pointerType: e.pointerType,
+        isPrimary: e.isPrimary,
+        button: e.button,
+      });
+    }
     e.preventDefault();
     action();
   }
@@ -46,17 +58,61 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
 
   const [sliderVal, setSliderVal] = useState<number | null>(null);
   const [orderIds, setOrderIds] = useState<number[]>([]);
+  const orderIdsRef = useRef<number[]>([]);
   const [mcSelected, setMcSelected] = useState<number[]>([]);
-  const mcSelectedRef = useRef(mcSelected);
-  mcSelectedRef.current = mcSelected;
+  /** Never assign from React state on each render — concurrent passes can wipe a fresh pick before commit. */
+  const mcSelectedRef = useRef<number[]>([]);
   const [singlePickedId, setSinglePickedId] = useState<number | null>(null);
   const singlePickedRef = useRef<number | null>(null);
-  singlePickedRef.current = singlePickedId;
   const mcAutoTimeSubmitRef = useRef(false);
+  /** One graded answer per question; blocks double pointerdown+click and stacked playSubmit() on mobile. */
+  const answerSentRef = useRef(false);
+  const uiTapSoundAtRef = useRef(0);
   const [draggingOid, setDraggingOid] = useState<number | null>(null);
   const [matchPairs, setMatchPairs] = useState<Map<number, number>>(new Map());
   const [matchPendingLeft, setMatchPendingLeft] = useState<number | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const qpDebugCtxRef = useRef({
+    pin: "",
+    questionIndex: -1,
+    phase: "" as GameState["phase"],
+  });
+  qpDebugCtxRef.current = {
+    pin: state.pin,
+    questionIndex: state.questionIndex,
+    phase: state.phase,
+  };
+
+  const tryTakeAnswerLock = useCallback((reason: string) => {
+    const base = { ...qpDebugCtxRef.current, reason };
+    if (disabled) {
+      camootLog("qp", "answerLock denied (disabled)", base);
+      return false;
+    }
+    if (answerSentRef.current) {
+      camootLog("qp", "answerLock denied (already sent)", base);
+      return false;
+    }
+    answerSentRef.current = true;
+    camootLog("qp", "answerLock granted", base);
+    return true;
+  }, [disabled]);
+
+  const playUiTapSound = () => {
+    const t = Date.now();
+    if (t - uiTapSoundAtRef.current < 140) return;
+    uiTapSoundAtRef.current = t;
+    playClick();
+  };
+
+  useEffect(() => {
+    camootLog("qp", "answerLock ref reset (new question/phase)", {
+      questionIndex: state.questionIndex,
+      phase: state.phase,
+      pin: state.pin,
+    });
+    answerSentRef.current = false;
+  }, [state.questionIndex, state.phase]);
 
   useEffect(() => {
     if (timeLeft !== null && timeLeft > 0 && timeLeft <= 3) {
@@ -98,13 +154,14 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
   useEffect(() => {
     if (!orderResetKey) {
       setOrderIds([]);
+      orderIdsRef.current = [];
       return;
     }
     const slash = orderResetKey.indexOf("/");
     const idsPart = slash >= 0 ? orderResetKey.slice(slash + 1) : "";
-    setOrderIds(
-      idsPart ? idsPart.split(",").map(Number).filter((n) => !Number.isNaN(n)) : [],
-    );
+    const next = idsPart ? idsPart.split(",").map(Number).filter((n) => !Number.isNaN(n)) : [];
+    orderIdsRef.current = next;
+    setOrderIds(next);
   }, [orderResetKey]);
 
   const mcResetKey =
@@ -117,6 +174,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       : "";
 
   useEffect(() => {
+    camootLog("qp", "mcResetKey effect", { mcResetKey, ...qpDebugCtxRef.current });
     if (!mcResetKey) {
       setMcSelected([]);
       setSinglePickedId(null);
@@ -147,9 +205,17 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     if (!mcIsMulti || disabled || state.phase !== "question") return;
     if (timeLeft !== 0) return;
     if (mcAutoTimeSubmitRef.current) return;
+    if (answerSentRef.current) return;
+    const ids = mcSelectedRef.current;
+    if (ids.length === 0) return;
     mcAutoTimeSubmitRef.current = true;
+    answerSentRef.current = true;
+    camootLog("qp", "mc auto-submit (multi, timer 0)", {
+      ...qpDebugCtxRef.current,
+      ids,
+    });
     playSubmit();
-    onSubmit([...mcSelectedRef.current]);
+    onSubmit([...ids]);
   }, [mcIsMulti, disabled, state.phase, timeLeft, onSubmit]);
 
   useEffect(() => {
@@ -157,9 +223,15 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     if (questionType !== "multiple_choice") return;
     if (timeLeft !== 0) return;
     if (mcAutoTimeSubmitRef.current) return;
+    if (answerSentRef.current) return;
     const id = singlePickedRef.current;
     if (id === null) return;
     mcAutoTimeSubmitRef.current = true;
+    answerSentRef.current = true;
+    camootLog("qp", "mc auto-submit (single, timer 0)", {
+      ...qpDebugCtxRef.current,
+      id,
+    });
     playSubmit();
     onSubmit(id);
   }, [mcIsMulti, disabled, state.phase, timeLeft, onSubmit, questionType]);
@@ -209,6 +281,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       (q as { swatches?: { index: number; color: string }[] }).swatches || [];
     const onOddPick = (index: number) => {
       if (disabled) return;
+      if (!tryTakeAnswerLock("odd_color_out")) return;
       setOddPicked(index);
       playClick();
       playSubmit();
@@ -237,9 +310,16 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                 aria-pressed={picked}
                 onPointerDown={(e) => {
                   if (disabled) return;
-                  onTouchOrPenPointerDown(e, () => onOddPick(s.index));
+                  onTouchOrPenPointerDown(e, () => onOddPick(s.index), `odd square ${s.index}`);
                 }}
-                onClick={() => onOddPick(s.index)}
+                onClick={(e) => {
+                  camootLog("qp", "odd square click", {
+                    ...qpDebugCtxRef.current,
+                    index: s.index,
+                    detail: e.detail,
+                  });
+                  onOddPick(s.index);
+                }}
               >
                 <span className="qp-odd-cell-num" aria-hidden>
                   {s.index + 1}
@@ -265,32 +345,55 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
   if (qt === "multiple_choice") {
     const options = normalizeMcDisplayOptions(q as Record<string, unknown>);
     const multiSelect = !!(q as { multiSelect?: boolean }).multiSelect;
+    const mcDbg = (extra: Record<string, unknown>) => ({
+      ...qpDebugCtxRef.current,
+      multiSelect,
+      singlePickedRef: singlePickedRef.current,
+      singlePickedState: singlePickedId,
+      mcSelectedRef: [...mcSelectedRef.current],
+      mcSelectedState: [...mcSelected],
+      answerSent: answerSentRef.current,
+      disabled,
+      ...extra,
+    });
     const toggleMc = (originalId: number) => {
       if (disabled) return;
-      playClick();
+      playUiTapSound();
       setMcSelected((prev) => {
         const s = new Set(prev);
         if (s.has(originalId)) s.delete(originalId);
         else s.add(originalId);
         const next = [...s].sort((a, b) => a - b);
         mcSelectedRef.current = next;
+        camootLog("qp", "mc toggle", mcDbg({ toggledId: originalId, next }));
         return next;
       });
     };
     const submitMc = () => {
       const ids = mcSelectedRef.current;
-      if (ids.length === 0) return;
+      camootLog("qp", "mc submit multi attempt", mcDbg({ ids: [...ids] }));
+      if (ids.length === 0) {
+        camootLog("qp", "mc submit multi aborted (empty)", mcDbg({}));
+        return;
+      }
+      if (!tryTakeAnswerLock("mc_multi_submit")) return;
       playSubmit();
       onSubmit(ids);
     };
     const pickSingleMc = (originalId: number) => {
-      playClick();
+      playUiTapSound();
       singlePickedRef.current = originalId;
       setSinglePickedId(originalId);
+      camootLog("qp", "mc pick single", mcDbg({ pickedId: originalId }));
     };
     const submitSingleMc = () => {
       const id = singlePickedRef.current;
-      if (id === null) return;
+      camootLog("qp", "mc submit single attempt", mcDbg({ idFromRef: id }));
+      if (id === null) {
+        camootLog("qp", "mc submit single aborted (null ref)", mcDbg({}));
+        return;
+      }
+      if (!tryTakeAnswerLock("mc_single_submit")) return;
       playSubmit();
       onSubmit(id);
     };
@@ -324,9 +427,20 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                 disabled={disabled}
                 onPointerDown={(e) => {
                   if (disabled) return;
-                  onTouchOrPenPointerDown(e, pickOpt);
+                  camootLog("qp", "mc option pointerdown", mcDbg({
+                    optId: opt.id,
+                    pointerType: e.pointerType,
+                    isPrimary: e.isPrimary,
+                  }));
+                  onTouchOrPenPointerDown(e, pickOpt, `mc option id=${opt.id}`);
                 }}
-                onClick={pickOpt}
+                onClick={(e) => {
+                  camootLog("qp", "mc option click", mcDbg({
+                    optId: opt.id,
+                    detail: e.detail,
+                  }));
+                  pickOpt();
+                }}
               >
                 <span className={"qp-shape" + (isChosen ? " qp-shape-checked" : "")} aria-hidden />
                 {opt.text}
@@ -341,9 +455,13 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             disabled={disabled || mcSelected.length === 0}
             onPointerDown={(e) => {
               if (disabled || mcSelectedRef.current.length === 0) return;
-              onTouchOrPenPointerDown(e, submitMc);
+              camootLog("qp", "mc submit pointerdown (multi)", mcDbg({ pointerType: e.pointerType }));
+              onTouchOrPenPointerDown(e, submitMc, "mc submit multi");
             }}
-            onClick={submitMc}
+            onClick={(e) => {
+              camootLog("qp", "mc submit click (multi)", mcDbg({ detail: e.detail }));
+              submitMc();
+            }}
           >
             Submit answer
           </button>
@@ -354,9 +472,13 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             disabled={disabled || singlePickedId === null}
             onPointerDown={(e) => {
               if (disabled || singlePickedRef.current === null) return;
-              onTouchOrPenPointerDown(e, submitSingleMc);
+              camootLog("qp", "mc submit pointerdown (single)", mcDbg({ pointerType: e.pointerType }));
+              onTouchOrPenPointerDown(e, submitSingleMc, "mc submit single");
             }}
-            onClick={submitSingleMc}
+            onClick={(e) => {
+              camootLog("qp", "mc submit click (single)", mcDbg({ detail: e.detail }));
+              submitSingleMc();
+            }}
           >
             Submit answer
           </button>
@@ -400,12 +522,20 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             disabled={disabled}
             onPointerDown={(e) => {
               if (disabled) return;
-              onTouchOrPenPointerDown(e, () => {
-                playSubmit();
-                onSubmit(val);
-              });
+              onTouchOrPenPointerDown(
+                e,
+                () => {
+                  camootLog("qp", "slider lock (touch path)", { ...qpDebugCtxRef.current, val });
+                  if (!tryTakeAnswerLock("slider_lock")) return;
+                  playSubmit();
+                  onSubmit(val);
+                },
+                "slider lock",
+              );
             }}
             onClick={() => {
+              camootLog("qp", "slider lock click", { ...qpDebugCtxRef.current, val });
+              if (!tryTakeAnswerLock("slider_lock")) return;
               playSubmit();
               onSubmit(val);
             }}
@@ -421,16 +551,19 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     const url = String((q as { imageUrl: string }).imageUrl || "");
     const submitImgPt = (clientX: number, clientY: number) => {
       if (disabled || !imgRef.current) return;
-      playClick();
       const rect = imgRef.current.getBoundingClientRect();
       const rw = rect.width;
       const rh = rect.height;
       if (rw <= 0 || rh <= 0) return;
+      if (!tryTakeAnswerLock("click_location")) return;
+      playClick();
       const x = (clientX - rect.left) / rw;
       const y = (clientY - rect.top) / rh;
+      camootLog("qp", "click_location submit", { ...qpDebugCtxRef.current, x, y });
       onSubmit({ x, y });
     };
     const onImgClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      camootLog("qp", "click_location img click", { ...qpDebugCtxRef.current, detail: e.detail });
       submitImgPt(e.clientX, e.clientY);
     };
     return (
@@ -443,7 +576,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           onPointerDown={(e) => {
             if (disabled) return;
             if (e.pointerType === "mouse" && e.button !== 0) return;
-            onTouchOrPenPointerDown(e, () => submitImgPt(e.clientX, e.clientY));
+            onTouchOrPenPointerDown(e, () => submitImgPt(e.clientX, e.clientY), "click_location");
           }}
           onClick={onImgClick}
           role="presentation"
@@ -475,7 +608,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     };
     const onLeftTap = (id: number) => {
       if (disabled) return;
-      playClick();
+      playUiTapSound();
       if (matchPairs.has(id)) {
         setMatchPairs((prev) => {
           const m = new Map(prev);
@@ -489,7 +622,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     };
     const onRightTap = (id: number) => {
       if (disabled || matchPendingLeft === null) return;
-      playClick();
+      playUiTapSound();
       addMatchPair(matchPendingLeft, id);
       setMatchPendingLeft(null);
     };
@@ -507,6 +640,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
         if (v === undefined) return;
         matchByLeft[i] = v;
       }
+      if (!tryTakeAnswerLock("match_submit")) return;
       playSubmit();
       onSubmit({ matchByLeft });
     };
@@ -624,9 +758,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
         const next = [...prev];
         const [x] = next.splice(from, 1);
         next.splice(to, 0, x);
+        orderIdsRef.current = next;
         return next;
       });
-      playClick();
+      playUiTapSound();
     };
 
     const onDragStart = (oid: number) => (e: React.DragEvent) => {
@@ -709,14 +844,28 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           disabled={disabled}
           onPointerDown={(e) => {
             if (disabled) return;
-            onTouchOrPenPointerDown(e, () => {
-              playSubmit();
-              onSubmit(orderIds);
-            });
+            onTouchOrPenPointerDown(
+              e,
+              () => {
+                camootLog("qp", "order submit (touch path)", {
+                  ...qpDebugCtxRef.current,
+                  orderIds: [...orderIdsRef.current],
+                });
+                if (!tryTakeAnswerLock("order_submit")) return;
+                playSubmit();
+                onSubmit([...orderIdsRef.current]);
+              },
+              "order submit",
+            );
           }}
           onClick={() => {
+            camootLog("qp", "order submit click", {
+              ...qpDebugCtxRef.current,
+              orderIds: [...orderIdsRef.current],
+            });
+            if (!tryTakeAnswerLock("order_submit")) return;
             playSubmit();
-            onSubmit(orderIds);
+            onSubmit([...orderIdsRef.current]);
           }}
         >
           Submit order

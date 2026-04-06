@@ -2,6 +2,13 @@
  * Client debug when `LOGGING=true` in `.env` at **build time** (Vite injects `__CAMOOT_LOG__`),
  * or enable at runtime without rebuild: add `?camoot_log=1` to the URL, or
  * `sessionStorage.setItem('camoot_log', '1')` then refresh.
+ *
+ * **Android (e.g. Chrome on Samsung):** open this app with `?camoot_log=1`, plug in USB,
+ * on desktop Chrome open `chrome://inspect` → Inspect the phone tab → Console shows
+ * `[camoot:qp]`, `[camoot:play]`, `[camoot:qp-touch]` lines in order as you tap.
+ *
+ * **Server:** set `CAMOOT_PLAYER_DEBUG=1` or `LOGGING=true` in `.env` → terminal shows
+ * `[camoot:server:player]` for every `player_answer` (incl. User-Agent), rejects, and timer→reveal.
  */
 
 function clientFlagEnabled(): boolean {

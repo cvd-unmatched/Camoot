@@ -12,7 +12,7 @@ import QRCode from "qrcode";
 import { v4 as uuidv4 } from "uuid";
 import * as quizStore from "./quizStore.js";
 import * as gameManager from "./gameManager.js";
-import { log, logWarn, logLoggingStatus } from "./log.js";
+import { log, logLoggingStatus, logPlayer, logPlayerWarn, logWarn } from "./log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -161,14 +161,73 @@ function scheduleQuestionDeadline(pin) {
   const REVEAL_GRACE_MS = 220;
   const ms = Math.max(500, (q?.timeLimitSec ?? 20) * 1000) + REVEAL_GRACE_MS;
   const idx = game.questionIndex;
+  const qType = q?.type ?? "?";
+  logPlayer("question timer scheduled", {
+    pin,
+    qIndex: idx,
+    qType,
+    deadlineMs: ms,
+    limitSec: q?.timeLimitSec ?? 20,
+    graceMs: REVEAL_GRACE_MS,
+    answersSoFar: game.answers?.size ?? 0,
+  });
   const t = setTimeout(() => {
     autoRevealTimers.delete(pin);
     const g = gameManager.getGameByPin(pin);
-    if (!g || g.phase !== "question" || g.questionIndex !== idx) return;
+    if (!g || g.phase !== "question" || g.questionIndex !== idx) {
+      logPlayer("question timer fired — skipped (phase or index changed)", {
+        pin,
+        expectedIdx: idx,
+        hasGame: !!g,
+        phase: g?.phase,
+        qIndex: g?.questionIndex,
+      });
+      return;
+    }
+    logPlayer("question timer fired → reveal", {
+      pin,
+      qIndex: idx,
+      qType,
+      answersRecorded: g.answers?.size ?? 0,
+    });
     g.phase = "reveal";
     broadcastGame(g);
   }, ms);
   autoRevealTimers.set(pin, t);
+}
+
+/** Compact answer shape for logs (no big payloads). */
+function summarizeAnswerForLog(answer) {
+  if (answer == null) return { kind: "nullish", raw: answer };
+  if (typeof answer === "number")
+    return { kind: "number.value", value: answer, isInt: Number.isInteger(answer) };
+  if (Array.isArray(answer))
+    return {
+      kind: "array",
+      len: answer.length,
+      sample: answer.slice(0, 12),
+      numeric: answer.every((x) => typeof x === "number" && !Number.isNaN(x)),
+    };
+  if (typeof answer === "object") {
+    if ("x" in answer && "y" in answer) {
+      const x = Number(answer.x);
+      const y = Number(answer.y);
+      return { kind: "point", x, y, finite: Number.isFinite(x) && Number.isFinite(y) };
+    }
+    if ("matchByLeft" in answer && Array.isArray(answer.matchByLeft)) {
+      const m = answer.matchByLeft;
+      return { kind: "matchByLeft", len: m.length, sample: m.slice(0, 12) };
+    }
+  }
+  const s = JSON.stringify(answer);
+  return { kind: "other", preview: s.length > 160 ? `${s.slice(0, 160)}…` : s };
+}
+
+function clientMeta(socket) {
+  const h = socket.handshake?.headers ?? {};
+  const ua = typeof h["user-agent"] === "string" ? h["user-agent"].slice(0, 200) : "";
+  const fwd = typeof h["x-forwarded-for"] === "string" ? h["x-forwarded-for"].split(",")[0].trim() : "";
+  return { ua, forwardedFor: fwd || undefined, transport: socket.conn?.transport?.name };
 }
 
 const ADMIN_SESSION_MSG = "This live session was closed from the admin page.";
@@ -245,6 +304,14 @@ io.on("connection", (socket) => {
         qIndex: game.questionIndex,
         socketId: socket.id,
       });
+      logPlayer("player_join reconnect (detail)", {
+        pin,
+        playerId: player.id,
+        name: player.name,
+        phase: game.phase,
+        qIndex: game.questionIndex,
+        ...clientMeta(socket),
+      });
       socket.emit("joined", { playerId: player.id, pin: game.pin });
       broadcastGame(game);
       return;
@@ -268,6 +335,7 @@ io.on("connection", (socket) => {
     socket.data.pin = pin;
     socket.data.playerId = player.id;
     log("player_join", "new player", { pin, name, playerId: player.id, socketId: socket.id });
+    logPlayer("player_join new (detail)", { pin, name, playerId: player.id, ...clientMeta(socket) });
     socket.emit("joined", { playerId: player.id, pin: game.pin });
     broadcastGame(game);
   });
@@ -406,16 +474,55 @@ io.on("connection", (socket) => {
     broadcastGame(game);
   });
 
-  socket.on("player_answer", ({ answer, questionIndex, clientTime }) => {
+  socket.on("player_answer", (payload = {}) => {
+    const { answer, questionIndex: rawQIdx, clientTime: rawClientTime } = payload;
     const pin = socket.data.pin;
     const playerId = socket.data.playerId;
+    const serverNow = Date.now();
+    const meta = clientMeta(socket);
+    const answerSummary = summarizeAnswerForLog(answer);
+    const questionIndex = rawQIdx === undefined || rawQIdx === null ? null : Number(rawQIdx);
+    const clientTime = rawClientTime === undefined || rawClientTime === null ? null : Number(rawClientTime);
+    const skewMs =
+      clientTime != null && Number.isFinite(clientTime) ? serverNow - clientTime : null;
+
+    logPlayer("player_answer packet", {
+      socketId: socket.id,
+      pin,
+      playerId,
+      role: socket.data.role,
+      payloadKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
+      questionIndexPayload: rawQIdx,
+      questionIndexParsed: questionIndex,
+      clientTime: rawClientTime,
+      skewMs,
+      answerSummary,
+      ...meta,
+    });
+
     if (!pin || !playerId || socket.data.role !== "player") {
       logWarn("player_answer", "ignored bad socket data", { pin, playerId, role: socket.data.role });
+      logPlayerWarn("player_answer REJECT bad socket", { pin, playerId, role: socket.data.role });
       return;
     }
     const game = gameManager.getGameByPin(pin);
     if (!game || game.phase !== "question") {
       logWarn("player_answer", "ignored wrong phase", { pin, phase: game?.phase, playerId });
+      logPlayerWarn("player_answer REJECT wrong phase", {
+        pin,
+        playerId,
+        phase: game?.phase,
+        wanted: "question",
+      });
+      return;
+    }
+    if (questionIndex === null || Number.isNaN(questionIndex)) {
+      logPlayerWarn("player_answer REJECT invalid questionIndex", {
+        pin,
+        playerId,
+        rawQIdx,
+        gameQIdx: game.questionIndex,
+      });
       return;
     }
     if (game.questionIndex !== questionIndex) {
@@ -425,16 +532,55 @@ io.on("connection", (socket) => {
         expected: game.questionIndex,
         got: questionIndex,
       });
+      logPlayerWarn("player_answer REJECT q index mismatch", {
+        pin,
+        playerId,
+        expected: game.questionIndex,
+        got: questionIndex,
+      });
       return;
     }
-    if (game.answers.has(playerId)) return;
+    if (game.answers.has(playerId)) {
+      logPlayerWarn("player_answer REJECT duplicate (already have answer for player)", {
+        pin,
+        playerId,
+        questionIndex,
+        answersInGameMap: game.answers.size,
+      });
+      return;
+    }
 
-    const elapsed = Math.max(0, Date.now() - (game.startedAt || Date.now()));
+    const elapsed = Math.max(0, serverNow - (game.startedAt || serverNow));
+    const qs = game.quizSnapshot?.questions || [];
+    const qNow = qs[game.questionIndex];
+    logPlayer("player_answer ACCEPT grading", {
+      pin,
+      playerId,
+      questionIndex,
+      qType: qNow?.type ?? "?",
+      elapsedMs: elapsed,
+      startedAt: game.startedAt,
+      skewMs,
+      answerSummary,
+    });
+
     gameManager.recordAnswer(game, playerId, { answer, clientTime });
     const result = gameManager.gradeAnswer(game, playerId, answer, elapsed);
     log("player_answer", pin, { playerId, questionIndex, correct: result.correct, points: result.points });
+    logPlayer("player_answer GRADED emit answer_result", {
+      pin,
+      playerId,
+      questionIndex,
+      correct: result.correct,
+      points: result.points,
+      penalty: result.penalty,
+    });
+
     socket.emit("answer_result", { ...result, questionIndex });
-    if (gameManager.allActivePlayersAnswered(game)) {
+
+    const allAnswered = gameManager.allActivePlayersAnswered(game);
+    if (allAnswered) {
+      logPlayer("all active players answered → reveal (clear deadline)", { pin, qIndex: questionIndex });
       clearQuestionDeadline(pin);
       game.phase = "reveal";
     }

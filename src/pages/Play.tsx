@@ -110,6 +110,8 @@ export default function Play() {
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [state, setState] = useState<GameState | null>(null);
   const [answered, setAnswered] = useState(false);
+  /** True as soon as we emit `player_answer` (before `answer_result`); drives grayed-out “you answered” UI. */
+  const [answerSubmitted, setAnswerSubmitted] = useState(false);
   const [lastPoints, setLastPoints] = useState<number | null>(null);
   const [lastPenalty, setLastPenalty] = useState<number | null>(null);
   const [lastCorrect, setLastCorrect] = useState<boolean | null>(null);
@@ -121,8 +123,10 @@ export default function Play() {
   const pendingNameRef = useRef("");
   const stateRef = useRef<GameState | null>(null);
   const answeredRef = useRef(false);
+  const answerSubmittedRef = useRef(false);
   stateRef.current = state;
   answeredRef.current = answered;
+  answerSubmittedRef.current = answerSubmitted;
 
   useEffect(() => {
     camootLog("play", "mount", {
@@ -131,6 +135,14 @@ export default function Play() {
       pinField: pin,
     });
   }, [pinParam, pin]);
+
+  useEffect(() => {
+    camootLog("play", "device / logging hint", {
+      ua: typeof navigator !== "undefined" ? navigator.userAgent : "",
+      maxTouchPoints: typeof navigator !== "undefined" ? navigator.maxTouchPoints : 0,
+      hint: "Enable logs: ?camoot_log=1 or sessionStorage camoot_log=1 then refresh; on S24 use USB + chrome://inspect",
+    });
+  }, []);
 
   useEffect(() => {
     const s = getSocket();
@@ -168,6 +180,7 @@ export default function Play() {
       }
       if (st.phase === "question") {
         setAnswered(false);
+        setAnswerSubmitted(false);
         setLastPoints(null);
         setLastPenalty(null);
         setLastCorrect(null);
@@ -199,8 +212,8 @@ export default function Play() {
       setError(e.message || "Error");
       setReconnecting(false);
     };
-    const onResult = (r: { points: number; correct: boolean; penalty?: number }) => {
-      camootLog("play", "answer_result", r);
+    const onResult = (r: { points: number; correct: boolean; penalty?: number; questionIndex?: number }) => {
+      camootLog("play", "answer_result (server ack)", r);
       setAnswered(true);
       setLastCorrect(r.correct);
       if (r.correct) {
@@ -217,6 +230,7 @@ export default function Play() {
       setJoined(false);
       setPlayerId(null);
       setAnswered(false);
+      setAnswerSubmitted(false);
       sessionStorage.removeItem(PLAYER_KEY);
       setError(e?.message || "Session ended.");
       setReconnecting(false);
@@ -227,6 +241,7 @@ export default function Play() {
       setJoined(false);
       setPlayerId(null);
       setAnswered(false);
+      setAnswerSubmitted(false);
       sessionStorage.removeItem(PLAYER_KEY);
       setError(null);
       setReconnecting(false);
@@ -322,9 +337,43 @@ export default function Play() {
 
   const onAnswer = useCallback((answer: PlayerAnswer) => {
     const st = stateRef.current;
-    if (!st || st.phase !== "question" || answeredRef.current) return;
-    setLastAnswerSummary(formatPlayerAnswerForReveal(st.question, answer));
+    const blocked =
+      !st
+        ? "no_state"
+        : st.phase !== "question"
+          ? "wrong_phase"
+          : answeredRef.current
+            ? "already_answered"
+            : answerSubmittedRef.current
+              ? "already_submitted"
+              : null;
+    if (blocked) {
+      camootLog("play", "onAnswer blocked (no emit)", {
+        reason: blocked,
+        phase: st?.phase,
+        questionIndex: st?.questionIndex,
+        answeredRef: answeredRef.current,
+        answerPreview:
+          typeof answer === "number"
+            ? answer
+            : Array.isArray(answer)
+              ? answer
+              : typeof answer === "object" && answer
+                ? Object.keys(answer)
+                : answer,
+      });
+      return;
+    }
     const s = getSocket();
+    camootLog("play", "player_answer emit", {
+      questionIndex: st.questionIndex,
+      pin: st.pin,
+      answer,
+      socketConnected: s.connected,
+      socketId: s.id,
+    });
+    setLastAnswerSummary(formatPlayerAnswerForReveal(st.question, answer));
+    setAnswerSubmitted(true);
     s.emit("player_answer", {
       answer,
       questionIndex: st.questionIndex,
@@ -574,9 +623,11 @@ export default function Play() {
           {state.players.find((p) => p.id === playerId)?.score ?? 0} pts
         </span>
       </div>
-      <QuestionPlayer state={state} disabled={answered} onSubmit={onAnswer} />
-      {answered && (
-        <p className="kh-wait-ans">Answer locked in…</p>
+      <QuestionPlayer state={state} disabled={answered || answerSubmitted} onSubmit={onAnswer} />
+      {(answered || answerSubmitted) && (
+        <p className="kh-wait-ans">
+          {answered ? "Answer locked in…" : "Answer submitted — waiting for results…"}
+        </p>
       )}
     </div>
   );
