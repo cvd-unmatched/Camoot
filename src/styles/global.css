@@ -593,6 +593,36 @@ button {
   line-height: 1.35;
 }
 
+.kh-reveal-mc-figure {
+  margin: 0 auto 1rem;
+  max-width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #e9ecef;
+  background: #f8f9fa;
+}
+
+.kh-reveal-qimage {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: min(40vh, 260px);
+  object-fit: contain;
+}
+
+.kh-host-mc-qimage {
+  display: block;
+  width: 100%;
+  max-width: min(520px, 100%);
+  max-height: min(42vh, 360px);
+  height: auto;
+  margin: 0 auto 1rem;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
 .kh-reveal-explanation {
   margin-top: 1.25rem;
   text-align: left;

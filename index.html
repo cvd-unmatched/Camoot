@@ -50,7 +50,33 @@
     />
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Visible before JS; React replaces #root on mount. If this never goes away, the module bundle did not run (see Cloudflare note in vite.config). -->
+    <div id="root">
+      <p
+        id="camoot-boot-loading"
+        style="
+          margin: 0;
+          padding: max(2rem, env(safe-area-inset-top, 0px)) 1.25rem;
+          font: 600 1.05rem system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+          color: #fff;
+          text-align: center;
+          text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+        "
+      >
+        Loading Camoot…
+      </p>
+    </div>
+    <script data-cfasync="false">
+      setTimeout(function () {
+        var el = document.getElementById("camoot-boot-loading");
+        if (!el) return;
+        el.innerHTML =
+          "Still stuck here? Your host may be delaying JavaScript. In Cloudflare: <strong>Speed → Optimization</strong> → turn <strong>Rocket Loader</strong> off (it breaks React). Then hard-refresh.";
+        el.style.color = "#ffc9c9";
+        el.style.maxWidth = "28rem";
+        el.style.margin = "0 auto";
+      }, 12000);
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

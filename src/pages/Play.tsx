@@ -424,6 +424,18 @@ export default function Play() {
           {lastAnswerSummary && (
             <p className="kh-reveal-your-answer">Your answer: {lastAnswerSummary}</p>
           )}
+          {q?.type === "multiple_choice" &&
+            typeof (q as { imageUrl?: string }).imageUrl === "string" &&
+            (q as { imageUrl: string }).imageUrl.trim() !== "" && (
+              <div className="kh-reveal-mc-figure">
+                <img
+                  src={(q as { imageUrl: string }).imageUrl}
+                  alt=""
+                  className="kh-reveal-qimage"
+                  decoding="async"
+                />
+              </div>
+            )}
           {lastPoints !== null && lastPoints > 0 && (
             <p className="kh-points-burst">+{lastPoints} points</p>
           )}

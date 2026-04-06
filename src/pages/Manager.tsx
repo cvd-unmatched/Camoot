@@ -697,7 +697,54 @@ function QuestionFields({
       )}
 
       {question.type === "multiple_choice" && (
-        <McEditor q={question} onChange={onChange} />
+        <>
+          <label style={{ display: "block", marginTop: "0.25rem", fontWeight: 600 }}>
+            Question image (optional)
+          </label>
+          <p style={{ fontSize: "0.85rem", color: "#666", margin: "0 0 0.5rem" }}>
+            Shown on host and player screens above the choices (e.g. photo for “Who has this job?”).
+          </p>
+          <input
+            className="kh-input"
+            value={question.imageUrl ?? ""}
+            onChange={(e) =>
+              onChange({
+                imageUrl: e.target.value.trim() === "" ? undefined : e.target.value.trim(),
+              } as Partial<QuizQuestion>)
+            }
+            placeholder="/uploads/… or https://…"
+            style={{ marginBottom: "0.5rem" }}
+          />
+          <input
+            type="file"
+            accept="image/*"
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void upload(f);
+            }}
+            style={{ marginBottom: "0.5rem" }}
+          />
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.75rem", marginBottom: "0.85rem" }}>
+            {question.imageUrl ? (
+              <img
+                src={question.imageUrl}
+                alt=""
+                style={{ maxHeight: 140, maxWidth: "100%", borderRadius: 10, border: "1px solid #ddd" }}
+              />
+            ) : null}
+            {question.imageUrl ? (
+              <button
+                type="button"
+                className="kh-btn kh-btn-outline kh-btn-sm"
+                onClick={() => onChange({ imageUrl: undefined } as Partial<QuizQuestion>)}
+              >
+                Remove image
+              </button>
+            ) : null}
+          </div>
+          <McEditor q={question} onChange={onChange} />
+        </>
       )}
       {question.type === "slider" && (
         <>

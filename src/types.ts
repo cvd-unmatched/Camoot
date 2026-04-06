@@ -36,6 +36,8 @@ export type QuizQuestion =
       id: string;
       type: "multiple_choice";
       question: string;
+      /** Optional image shown above the answer choices (same `/uploads/…` URLs as elsewhere). */
+      imageUrl?: string;
       options: (string | McOption)[];
       correctIndex?: number;
       correctIndices?: number[];

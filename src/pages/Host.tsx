@@ -439,6 +439,7 @@ export default function Host() {
               <HostTimer state={state} />
             </div>
             <h2>{String(state.question.question)}</h2>
+            <HostMcQuestionImage q={state.question} />
             <HostQuestionPreview q={state.question} reveal={state.reveal} />
             <p className="kh-host-q-responses-label">Responses</p>
             <ul className="kh-host-q-responses" aria-label="Who has answered">
@@ -464,6 +465,7 @@ export default function Host() {
         <div className="kh-host-center-stage">
           <div className="kh-panel kh-host-q kh-panel-glass">
             <h2 style={{ marginTop: 0 }}>Reveal & standings</h2>
+            <HostMcQuestionImage q={state.question} />
             <HostQuestionPreview q={state.question} reveal={state.reveal} showCorrect />
             <h3 style={{ margin: "1.25rem 0 0.5rem", fontSize: "1.05rem" }}>Leaderboard</h3>
             <ol className="kh-host-lb">
@@ -520,6 +522,13 @@ function HostTimer({ state }: { state: GameState }) {
   const elapsed = (Date.now() - started) / 1000;
   const left = Math.max(0, Math.ceil(limitSec - elapsed));
   return <span className="kh-host-timer kh-host-timer-pulse">{left}s</span>;
+}
+
+function HostMcQuestionImage({ q }: { q: Record<string, unknown> }) {
+  if (q.type !== "multiple_choice") return null;
+  const url = q.imageUrl;
+  if (typeof url !== "string" || url.trim() === "") return null;
+  return <img src={url} alt="" className="kh-host-mc-qimage" decoding="async" />;
 }
 
 function normalizeMcOptions(q: Record<string, unknown>): string[] {

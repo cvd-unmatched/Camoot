@@ -248,10 +248,16 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       playSubmit();
       onSubmit(singlePickedId);
     };
+    const mcImageUrl = (q as { imageUrl?: string }).imageUrl;
     return (
       <div className="qp-wrap qp-anim-in">
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
+        {typeof mcImageUrl === "string" && mcImageUrl.trim() !== "" ? (
+          <div className="qp-mc-figure">
+            <img className="qp-mc-qimage" src={mcImageUrl} alt="" decoding="async" />
+          </div>
+        ) : null}
         {multiSelect ? (
           <p className="qp-mc-hint">Select all that apply. Tap Submit, or wait: your picks send when time runs out.</p>
         ) : (

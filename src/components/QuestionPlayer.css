@@ -34,6 +34,24 @@
   line-height: 1.35;
 }
 
+.qp-mc-figure {
+  margin: 0 auto 1.15rem;
+  max-width: min(420px, 100%);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.qp-mc-qimage {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: min(48vh, 320px);
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.2);
+}
+
 .qp-mc-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

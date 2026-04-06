@@ -188,11 +188,13 @@ function sanitizeQuestionForPlayer(q) {
         [withIds[i], withIds[j]] = [withIds[j], withIds[i]];
       }
     }
-    return {
+    const out = {
       ...base,
       options: withIds,
       multiSelect: correct.length > 1,
     };
+    if (q.imageUrl) out.imageUrl = String(q.imageUrl);
+    return out;
   }
   if (q.type === "slider") {
     return {
