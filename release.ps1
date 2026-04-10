@@ -24,9 +24,18 @@ $ScriptDir = $PSScriptRoot
 Set-Location -LiteralPath $ScriptDir
 
 $VersionPath = Join-Path $ScriptDir 'VERSION'
+$ReleaseNotesPath = Join-Path $ScriptDir 'RELEASE_NOTES.md'
 if (-not (Test-Path -LiteralPath $VersionPath)) {
   Write-Host 'VERSION file not found. Create VERSION with the current version (e.g. 1.0.0)' -ForegroundColor Red
   exit 1
+}
+if (-not (Test-Path -LiteralPath $ReleaseNotesPath)) {
+  [System.IO.File]::WriteAllText(
+    $ReleaseNotesPath,
+    "# Release notes`n`n- Describe what changed in this release.`n",
+    [System.Text.UTF8Encoding]::new($false)
+  )
+  Write-Host 'Created RELEASE_NOTES.md template. Fill it before your next release.' -ForegroundColor Yellow
 }
 
 $versionContent = Get-Content -LiteralPath $VersionPath -Raw
@@ -231,13 +240,20 @@ $pkgJson = Get-Content -LiteralPath $pkgPath -Raw
 $pkgNew = $pkgJson -replace '"version"\s*:\s*"[^"]*"', "`"version`": `"$($releaseInfo.Version)`""
 [System.IO.File]::WriteAllText($pkgPath, $pkgNew, [System.Text.UTF8Encoding]::new($false))
 
+$notesRaw = Get-Content -LiteralPath $ReleaseNotesPath -Raw
+$notesTrimmed = $notesRaw.Trim()
+$tagMessage = "$($releaseInfo.Type) release version $($releaseInfo.Version)"
+if ($notesTrimmed) {
+  $tagMessage = "$tagMessage`n`nRelease notes:`n$notesTrimmed"
+}
+
 Write-Host 'Committing version update...' -ForegroundColor Yellow
 git add VERSION
 git add package.json
 git commit -m "Bump version to $($releaseInfo.Version)"
 
 Write-Host "Creating tag $($releaseInfo.Tag)..." -ForegroundColor Yellow
-git tag -a $releaseInfo.Tag -m "$($releaseInfo.Type) release version $($releaseInfo.Version)"
+git tag -a $releaseInfo.Tag -m "$tagMessage"
 
 if ($LASTEXITCODE -ne 0) {
   Write-Host 'Failed to create tag' -ForegroundColor Red
@@ -257,6 +273,13 @@ if ($LASTEXITCODE -ne 0) {
   Write-Host 'Failed to push tag' -ForegroundColor Red
   exit 1
 }
+
+[System.IO.File]::WriteAllText(
+  $ReleaseNotesPath,
+  "# Release notes`n`n- Describe what changed in this release.`n",
+  [System.Text.UTF8Encoding]::new($false)
+)
+Write-Host 'Cleared RELEASE_NOTES.md template for next release.' -ForegroundColor Green
 
 Write-Host ''
 Write-Host "$($releaseInfo.Type) release $($releaseInfo.Version) created and pushed successfully!" -ForegroundColor Green

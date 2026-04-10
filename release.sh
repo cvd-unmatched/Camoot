@@ -67,6 +67,13 @@ if [[ ! -f VERSION ]]; then
   exit 1
 fi
 
+RELEASE_NOTES_FILE="RELEASE_NOTES.md"
+RELEASE_NOTES_TEMPLATE=$'# Release notes\n\n- Describe what changed in this release.\n'
+if [[ ! -f "$RELEASE_NOTES_FILE" ]]; then
+  printf '%s' "$RELEASE_NOTES_TEMPLATE" > "$RELEASE_NOTES_FILE"
+  echo -e "${YELLOW}Created RELEASE_NOTES.md template. Fill it before your next release.${NC}"
+fi
+
 current_version=""
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "${line//[$' \t\r\n']/}" ]] && continue
@@ -231,13 +238,20 @@ if ! command -v perl >/dev/null 2>&1; then
 fi
 NEW_VERSION="$NEW_VERSION" perl -i -pe 's/"version":\s*"[^"]*"/"version": "$ENV{NEW_VERSION}"/' package.json
 
+notes_trimmed="$(sed -e 's/^[[:space:]]*$//g' "$RELEASE_NOTES_FILE" | tr -d '\r')"
+tag_message="${RELEASE_TYPE_NAME} release version ${NEW_VERSION}"
+if [[ -n "${notes_trimmed//[$'\n\t ']/}" ]]; then
+  tag_message+=$'\n\nRelease notes:\n'
+  tag_message+="$notes_trimmed"
+fi
+
 echo -e "${YELLOW}Committing version update...${NC}"
 git add VERSION
 git add package.json
 git commit -m "Bump version to $NEW_VERSION"
 
 echo -e "${YELLOW}Creating tag $TAG...${NC}"
-git tag -a "$TAG" -m "$RELEASE_TYPE_NAME release version $NEW_VERSION"
+git tag -a "$TAG" -m "$tag_message"
 
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 echo -e "${YELLOW}Pushing branch '$current_branch' and tag to origin...${NC}"
@@ -249,6 +263,9 @@ if ! git push origin "$TAG"; then
   echo -e "${RED}Failed to push tag${NC}" >&2
   exit 1
 fi
+
+printf '%s' "$RELEASE_NOTES_TEMPLATE" > "$RELEASE_NOTES_FILE"
+echo -e "${GREEN}Cleared RELEASE_NOTES.md template for next release.${NC}"
 
 echo ""
 echo -e "${GREEN}$RELEASE_TYPE_NAME release $NEW_VERSION created and pushed successfully!${NC}"
