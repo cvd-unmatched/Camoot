@@ -574,10 +574,12 @@ function QuizEditor({
             <QuestionFields question={question} token={token} onChange={(patch) => updateQuestion(index, patch)} />
           </div>
         ))}
-        <AddQuestionToolbar
-          onAdd={addQuestion}
-          style={{ marginTop: "1.25rem", marginBottom: "0.75rem" }}
-        />
+        {quiz.questions.length > 0 ? (
+          <AddQuestionToolbar
+            onAdd={addQuestion}
+            style={{ marginTop: "1.25rem", marginBottom: "0.75rem" }}
+          />
+        ) : null}
         <button type="button" className="kh-btn kh-btn-primary" onClick={() => onSave()}>
           Save quiz
         </button>

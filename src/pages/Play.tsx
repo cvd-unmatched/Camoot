@@ -167,6 +167,10 @@ export default function Play() {
         playerCount: st.players.length,
         hasQuestion: !!st.question,
       });
+      if (st.phase === "ended") {
+        // Keep podium visible in the current view, but do not persist sticky rejoin.
+        sessionStorage.removeItem(PLAYER_KEY);
+      }
       setState(st);
       const stored = loadStoredSession();
       if (

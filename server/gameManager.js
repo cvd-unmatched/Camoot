@@ -419,6 +419,7 @@ export function gradeAnswer(game, playerId, answer, elapsedMs) {
   const maxPoints = q.points ?? 1000;
 
   let correct = false;
+  let partialPoints = 0;
   /** @type {number[]} */
   let mcExpected = [];
   /** @type {number[]} */
@@ -429,6 +430,15 @@ export function gradeAnswer(game, playerId, answer, elapsedMs) {
     mcExpected = getMcCorrectIndices(q);
     mcGot = normalizeMcAnswer(answer);
     correct = arraysEqual(mcExpected, mcGot);
+    // Multi-select partial credit: any correct picks earn a proportional share.
+    // Full points still require exact match.
+    if (!correct && mcExpected.length > 1) {
+      const hitCount = mcGot.filter((i) => mcExpected.includes(i)).length;
+      if (hitCount > 0) {
+        const base = computePoints(timeLimitMs, elapsedMs, maxPoints);
+        partialPoints = Math.round(base * (hitCount / mcExpected.length));
+      }
+    }
   } else if (q.type === "slider") {
     const v = Number(answer);
     const tol = q.tolerance ?? 0;
@@ -461,7 +471,7 @@ export function gradeAnswer(game, playerId, answer, elapsedMs) {
     correct = typeof want === "number" && Number.isInteger(got) && got === want && got >= 0 && got < 4;
   }
 
-  const points = correct ? computePoints(timeLimitMs, elapsedMs, maxPoints) : 0;
+  const points = correct ? computePoints(timeLimitMs, elapsedMs, maxPoints) : partialPoints;
   let penalty = 0;
   const p = game.players.get(playerId);
   if (p) {
