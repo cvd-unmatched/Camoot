@@ -6,26 +6,6 @@ import "./QuestionPlayer.css";
 
 const COLORS = ["#e21b3c", "#1368ce", "#f5c400", "#26890c", "#0aa3a3", "#864cbf", "#d45400", "#b23aee"];
 
-/** Touch/pen: run on pointerdown and preventDefault so the delayed synthetic click does not drop or double the action. Mouse uses onClick only (this handler skips mouse). */
-function onTouchOrPenPointerDown(
-  e: React.PointerEvent,
-  action: () => void,
-  debugLabel?: string,
-) {
-  if (e.pointerType === "mouse" && e.button !== 0) return;
-  if (e.pointerType === "touch" || e.pointerType === "pen") {
-    if (debugLabel) {
-      camootLog("qp-touch", debugLabel, {
-        pointerType: e.pointerType,
-        isPrimary: e.isPrimary,
-        button: e.button,
-      });
-    }
-    e.preventDefault();
-    action();
-  }
-}
-
 export function normalizeMcDisplayOptions(q: Record<string, unknown>): { id: number; text: string }[] {
   const raw = q.options;
   if (!Array.isArray(raw) || raw.length === 0) return [];
@@ -318,10 +298,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                 disabled={disabled}
                 aria-label={`Square ${s.index + 1}`}
                 aria-pressed={picked}
-                onPointerDown={(e) => {
-                  if (disabled) return;
-                  onTouchOrPenPointerDown(e, () => onOddPick(s.index), `odd square ${s.index}`);
-                }}
                 onClick={(e) => {
                   camootLog("qp", "odd square click", {
                     ...qpDebugCtxRef.current,
@@ -435,15 +411,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                 className={"qp-mc-btn" + (isChosen ? " qp-mc-btn-selected" : "")}
                 style={{ background: COLORS[displayIndex % COLORS.length] }}
                 disabled={disabled}
-                onPointerDown={(e) => {
-                  if (disabled) return;
-                  camootLog("qp", "mc option pointerdown", mcDbg({
-                    optId: opt.id,
-                    pointerType: e.pointerType,
-                    isPrimary: e.isPrimary,
-                  }));
-                  onTouchOrPenPointerDown(e, pickOpt, `mc option id=${opt.id}`);
-                }}
                 onClick={(e) => {
                   camootLog("qp", "mc option click", mcDbg({
                     optId: opt.id,
@@ -463,11 +430,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             type="button"
             className="kh-btn kh-btn-primary qp-submit"
             disabled={disabled || mcSelected.length === 0}
-            onPointerDown={(e) => {
-              if (disabled || mcSelectedRef.current.length === 0) return;
-              camootLog("qp", "mc submit pointerdown (multi)", mcDbg({ pointerType: e.pointerType }));
-              onTouchOrPenPointerDown(e, submitMc, "mc submit multi");
-            }}
             onClick={(e) => {
               camootLog("qp", "mc submit click (multi)", mcDbg({ detail: e.detail }));
               submitMc();
@@ -480,11 +442,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             type="button"
             className="kh-btn kh-btn-primary qp-submit"
             disabled={disabled || singlePickedId === null}
-            onPointerDown={(e) => {
-              if (disabled || singlePickedRef.current === null) return;
-              camootLog("qp", "mc submit pointerdown (single)", mcDbg({ pointerType: e.pointerType }));
-              onTouchOrPenPointerDown(e, submitSingleMc, "mc submit single");
-            }}
             onClick={(e) => {
               camootLog("qp", "mc submit click (single)", mcDbg({ detail: e.detail }));
               submitSingleMc();
@@ -530,19 +487,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             type="button"
             className="kh-btn kh-btn-primary qp-submit"
             disabled={disabled}
-            onPointerDown={(e) => {
-              if (disabled) return;
-              onTouchOrPenPointerDown(
-                e,
-                () => {
-                  camootLog("qp", "slider lock (touch path)", { ...qpDebugCtxRef.current, val });
-                  if (!tryTakeAnswerLock("slider_lock")) return;
-                  playSubmit();
-                  onSubmit(val);
-                },
-                "slider lock",
-              );
-            }}
             onClick={() => {
               camootLog("qp", "slider lock click", { ...qpDebugCtxRef.current, val });
               if (!tryTakeAnswerLock("slider_lock")) return;
@@ -583,11 +527,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
         <p className="qp-hint">Tap the correct spot on the image.</p>
         <div
           className="qp-click"
-          onPointerDown={(e) => {
-            if (disabled) return;
-            if (e.pointerType === "mouse" && e.button !== 0) return;
-            onTouchOrPenPointerDown(e, () => submitImgPt(e.clientX, e.clientY), "click_location");
-          }}
           onClick={onImgClick}
           role="presentation"
         >
@@ -673,10 +612,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           }
           style={{ borderColor: paired || active ? COLORS[row.id % COLORS.length] : undefined }}
           disabled={disabled}
-          onPointerDown={(e) => {
-            if (disabled) return;
-            onTouchOrPenPointerDown(e, matchTap);
-          }}
           onClick={matchTap}
         >
           {url ? <img src={url} alt="" className="qp-match-img" draggable={false} /> : null}
@@ -725,10 +660,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                             : undefined,
                       }}
                       disabled={disabled || !canTapRight}
-                      onPointerDown={(e) => {
-                        if (disabled || !canTapRight) return;
-                        onTouchOrPenPointerDown(e, () => onRightTap(row.id));
-                      }}
                       onClick={() => onRightTap(row.id)}
                     >
                       {row.imageUrl?.trim() ? (
@@ -745,10 +676,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           type="button"
           className="kh-btn kh-btn-primary qp-submit"
           disabled={disabled || !complete}
-          onPointerDown={(e) => {
-            if (disabled || !complete) return;
-            onTouchOrPenPointerDown(e, submitMatch);
-          }}
           onClick={submitMatch}
         >
           Submit matches
@@ -871,10 +798,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                 <button
                   type="button"
                   disabled={disabled || idx === 0}
-                  onPointerDown={(e) => {
-                    if (disabled || idx === 0) return;
-                    onTouchOrPenPointerDown(e, () => move(idx, idx - 1));
-                  }}
                   onClick={() => move(idx, idx - 1)}
                 >
                   ↑
@@ -882,10 +805,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
                 <button
                   type="button"
                   disabled={disabled || idx === orderIds.length - 1}
-                  onPointerDown={(e) => {
-                    if (disabled || idx === orderIds.length - 1) return;
-                    onTouchOrPenPointerDown(e, () => move(idx, idx + 1));
-                  }}
                   onClick={() => move(idx, idx + 1)}
                 >
                   ↓
@@ -898,22 +817,6 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           type="button"
           className="kh-btn kh-btn-primary qp-submit"
           disabled={disabled}
-          onPointerDown={(e) => {
-            if (disabled) return;
-            onTouchOrPenPointerDown(
-              e,
-              () => {
-                camootLog("qp", "order submit (touch path)", {
-                  ...qpDebugCtxRef.current,
-                  orderIds: [...orderIdsRef.current],
-                });
-                if (!tryTakeAnswerLock("order_submit")) return;
-                playSubmit();
-                onSubmit([...orderIdsRef.current]);
-              },
-              "order submit",
-            );
-          }}
           onClick={() => {
             camootLog("qp", "order submit click", {
               ...qpDebugCtxRef.current,
