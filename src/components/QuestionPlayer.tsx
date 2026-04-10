@@ -57,6 +57,29 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
   const [matchPendingLeft, setMatchPendingLeft] = useState<number | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const [clickZoom, setClickZoom] = useState(1);
+  const [clickPan, setClickPan] = useState({ x: 0, y: 0 });
+  const clickGestureRef = useRef<{
+    mode: "none" | "pan" | "pinch";
+    startX: number;
+    startY: number;
+    startPanX: number;
+    startPanY: number;
+    startDist: number;
+    startZoom: number;
+    startCenterX: number;
+    startCenterY: number;
+  }>({
+    mode: "none",
+    startX: 0,
+    startY: 0,
+    startPanX: 0,
+    startPanY: 0,
+    startDist: 0,
+    startZoom: 1,
+    startCenterX: 0,
+    startCenterY: 0,
+  });
+  const suppressNextTapRef = useRef(false);
   const qpDebugCtxRef = useRef({
     pin: "",
     questionIndex: -1,
@@ -254,6 +277,8 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
   useEffect(() => {
     if (!clickLocationResetKey) return;
     setClickZoom(1);
+    setClickPan({ x: 0, y: 0 });
+    suppressNextTapRef.current = false;
   }, [clickLocationResetKey]);
 
   const [oddPicked, setOddPicked] = useState<number | null>(null);
@@ -516,6 +541,16 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
 
   if (qt === "click_location") {
     const url = String((q as { imageUrl: string }).imageUrl || "");
+    const clampZoom = (z: number) => Math.max(1, Math.min(4, z));
+    const touchDist = (a: Touch, b: Touch) => {
+      const dx = a.clientX - b.clientX;
+      const dy = a.clientY - b.clientY;
+      return Math.hypot(dx, dy);
+    };
+    const touchCenter = (a: Touch, b: Touch) => ({
+      x: (a.clientX + b.clientX) / 2,
+      y: (a.clientY + b.clientY) / 2,
+    });
     const submitImgPt = (clientX: number, clientY: number) => {
       if (disabled || !imgRef.current) return;
       const rect = imgRef.current.getBoundingClientRect();
@@ -530,6 +565,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       onSubmit({ x, y });
     };
     const onImgClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (suppressNextTapRef.current) {
+        suppressNextTapRef.current = false;
+        return;
+      }
       camootLog("qp", "click_location img click", { ...qpDebugCtxRef.current, detail: e.detail });
       submitImgPt(e.clientX, e.clientY);
     };
@@ -538,48 +577,101 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
         <p className="qp-hint">Tap the correct spot on the image.</p>
-        <div className="qp-click-zoom-controls">
-          <button
-            type="button"
-            className="kh-btn kh-btn-outline kh-btn-sm"
-            disabled={clickZoom <= 1}
-            onClick={() => setClickZoom((z) => Math.max(1, Number((z - 0.5).toFixed(2))))}
-          >
-            −
-          </button>
-          <span className="qp-click-zoom-label">{Math.round(clickZoom * 100)}%</span>
-          <button
-            type="button"
-            className="kh-btn kh-btn-outline kh-btn-sm"
-            disabled={clickZoom >= 4}
-            onClick={() => setClickZoom((z) => Math.min(4, Number((z + 0.5).toFixed(2))))}
-          >
-            +
-          </button>
-          <button
-            type="button"
-            className="kh-btn kh-btn-outline kh-btn-sm"
-            disabled={clickZoom === 1}
-            onClick={() => setClickZoom(1)}
-          >
-            Reset
-          </button>
-        </div>
-        <p className="qp-click-zoom-hint">Zoom and drag to pan, then tap the exact spot.</p>
+        <p className="qp-click-zoom-hint">Pinch to zoom, drag to pan, then tap the exact spot.</p>
         <div
           className="qp-click"
+          onTouchStart={(e) => {
+            if (disabled) return;
+            const g = clickGestureRef.current;
+            if (e.touches.length >= 2) {
+              const a = e.touches[0];
+              const b = e.touches[1];
+              const c = touchCenter(a, b);
+              g.mode = "pinch";
+              g.startDist = touchDist(a, b);
+              g.startZoom = clickZoom;
+              g.startPanX = clickPan.x;
+              g.startPanY = clickPan.y;
+              g.startCenterX = c.x;
+              g.startCenterY = c.y;
+              suppressNextTapRef.current = true;
+              return;
+            }
+            if (e.touches.length === 1) {
+              const t = e.touches[0];
+              g.mode = "pan";
+              g.startX = t.clientX;
+              g.startY = t.clientY;
+              g.startPanX = clickPan.x;
+              g.startPanY = clickPan.y;
+            }
+          }}
+          onTouchMove={(e) => {
+            if (disabled) return;
+            const g = clickGestureRef.current;
+            if (g.mode === "pan" && e.touches.length === 1) {
+              const t = e.touches[0];
+              const dx = t.clientX - g.startX;
+              const dy = t.clientY - g.startY;
+              if (Math.abs(dx) > 5 || Math.abs(dy) > 5) suppressNextTapRef.current = true;
+              setClickPan({ x: g.startPanX + dx, y: g.startPanY + dy });
+              e.preventDefault();
+              return;
+            }
+            if (e.touches.length >= 2) {
+              const a = e.touches[0];
+              const b = e.touches[1];
+              const c = touchCenter(a, b);
+              if (g.mode !== "pinch") {
+                g.mode = "pinch";
+                g.startDist = touchDist(a, b);
+                g.startZoom = clickZoom;
+                g.startPanX = clickPan.x;
+                g.startPanY = clickPan.y;
+                g.startCenterX = c.x;
+                g.startCenterY = c.y;
+              }
+              const d = touchDist(a, b);
+              const scale = g.startDist > 0 ? d / g.startDist : 1;
+              setClickZoom(clampZoom(Number((g.startZoom * scale).toFixed(3))));
+              setClickPan({
+                x: g.startPanX + (c.x - g.startCenterX),
+                y: g.startPanY + (c.y - g.startCenterY),
+              });
+              suppressNextTapRef.current = true;
+              e.preventDefault();
+            }
+          }}
+          onTouchEnd={(e) => {
+            const g = clickGestureRef.current;
+            if (e.touches.length === 0) {
+              g.mode = "none";
+              return;
+            }
+            if (e.touches.length === 1) {
+              const t = e.touches[0];
+              g.mode = "pan";
+              g.startX = t.clientX;
+              g.startY = t.clientY;
+              g.startPanX = clickPan.x;
+              g.startPanY = clickPan.y;
+            }
+          }}
           onClick={onImgClick}
           role="presentation"
         >
           {url ? (
-            <div className="qp-click-pan">
+            <div className="qp-click-gesture">
               <img
                 ref={imgRef}
                 src={url}
                 alt=""
                 className="qp-click-img"
                 draggable={false}
-                style={{ width: `${clickZoom * 100}%`, maxWidth: "none" }}
+                style={{
+                  transform: `translate(${clickPan.x}px, ${clickPan.y}px) scale(${clickZoom})`,
+                  transformOrigin: "50% 50%",
+                }}
               />
             </div>
           ) : (
