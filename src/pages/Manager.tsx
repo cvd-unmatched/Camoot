@@ -775,7 +775,31 @@ function QuestionFields({
         style={{ marginBottom: "0.75rem" }}
         placeholder="Short explanation after the reveal…"
       />
-      {question.type !== "multiple_choice" && (
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "0.65rem",
+          marginBottom: "0.85rem",
+        }}
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 600 }}>
+          <input
+            type="checkbox"
+            checked={!!question.anyAnswerCorrect}
+            onChange={(e) =>
+              onChange(
+                e.target.checked
+                  ? ({ anyAnswerCorrect: true, penaltyOnWrong: undefined, penaltyPoints: undefined } as Partial<QuizQuestion>)
+                  : ({ anyAnswerCorrect: undefined } as Partial<QuizQuestion>)
+              )
+            }
+          />
+          Any answer is correct
+        </label>
+      </div>
+      {question.type !== "multiple_choice" && !question.anyAnswerCorrect && (
         <div
           style={{
             display: "flex",
@@ -1347,6 +1371,8 @@ function OrderEditor({
   onChange: (patch: Partial<QuizQuestion>) => void;
 }) {
   const identityOrder = (items: string[]) => items.map((_, i) => i);
+  const [dragFromIndex, setDragFromIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const setItemText = (index: number, text: string) => {
     const items = q.items.map((t, j) => (j === index ? text : t));
@@ -1368,6 +1394,29 @@ function OrderEditor({
     const items = q.items.filter((_, j) => j !== index);
     onChange({ items, correctOrder: identityOrder(items) });
   };
+  const startDrag = (index: number) => (e: React.DragEvent<HTMLLIElement>) => {
+    setDragFromIndex(index);
+    setDragOverIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(index));
+  };
+  const onDragOverItem = (index: number) => (e: React.DragEvent<HTMLLIElement>) => {
+    e.preventDefault();
+    if (dragOverIndex !== index) setDragOverIndex(index);
+    e.dataTransfer.dropEffect = "move";
+  };
+  const onDropItem = (index: number) => (e: React.DragEvent<HTMLLIElement>) => {
+    e.preventDefault();
+    const from = dragFromIndex;
+    setDragFromIndex(null);
+    setDragOverIndex(null);
+    if (from === null || from === index) return;
+    move(from, index);
+  };
+  const endDrag = () => {
+    setDragFromIndex(null);
+    setDragOverIndex(null);
+  };
 
   return (
     <>
@@ -1375,10 +1424,25 @@ function OrderEditor({
         Top to bottom is the correct order. Players see items shuffled and put them in this order.
       </p>
       <div style={{ marginTop: "0.5rem" }}>
-        <span style={{ fontWeight: 600 }}>Items (reorder with arrows):</span>
+        <span style={{ fontWeight: 600 }}>Items (drag and drop to reorder):</span>
         <ul className="kh-order-edit">
           {q.items.map((text, i) => (
-            <li key={i}>
+            <li
+              key={i}
+              draggable
+              onDragStart={startDrag(i)}
+              onDragOver={onDragOverItem(i)}
+              onDrop={onDropItem(i)}
+              onDragEnd={endDrag}
+              className={
+                "kh-order-edit-item" +
+                (dragFromIndex === i ? " is-dragging" : "") +
+                (dragOverIndex === i && dragFromIndex !== i ? " is-drop-target" : "")
+              }
+            >
+              <span className="kh-order-edit-grip" aria-hidden title="Drag to reorder">
+                ⋮⋮
+              </span>
               <input
                 className="kh-input kh-order-edit-input"
                 value={text}
@@ -1386,26 +1450,6 @@ function OrderEditor({
                 aria-label={`Order item ${i + 1}`}
               />
               <span className="kh-order-edit-btns">
-                <button
-                  type="button"
-                  className="kh-btn kh-btn-outline kh-btn-sm"
-                  style={{ minWidth: "2.35rem" }}
-                  onClick={() => move(i, i - 1)}
-                  disabled={i === 0}
-                  title="Move up"
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="kh-btn kh-btn-outline kh-btn-sm"
-                  style={{ minWidth: "2.35rem" }}
-                  onClick={() => move(i, i + 1)}
-                  disabled={i === q.items.length - 1}
-                  title="Move down"
-                >
-                  ↓
-                </button>
                 <button
                   type="button"
                   className="kh-btn kh-btn-danger kh-btn-sm"

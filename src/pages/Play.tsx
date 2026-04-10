@@ -522,6 +522,9 @@ export default function Play() {
           {lastAnswerSummary && (
             <p className="kh-reveal-your-answer">Your answer: {lastAnswerSummary}</p>
           )}
+          {r && r.anyAnswerCorrect === true && (
+            <p className="kh-reveal-correct">This was a joke round: every answer counts as correct.</p>
+          )}
           {q?.type === "multiple_choice" &&
             typeof (q as { imageUrl?: string }).imageUrl === "string" &&
             (q as { imageUrl: string }).imageUrl.trim() !== "" && (

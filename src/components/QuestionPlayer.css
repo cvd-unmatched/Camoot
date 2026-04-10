@@ -411,6 +411,35 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+.qp-click-zoom-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  margin: 0 0 0.6rem;
+  flex-wrap: wrap;
+}
+
+.qp-click-zoom-label {
+  min-width: 3.6rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.qp-click-zoom-hint {
+  text-align: center;
+  margin: 0 0 0.5rem;
+  font-size: 0.86rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.qp-click-pan {
+  max-height: min(68vh, 540px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+}
+
 .qp-click-img {
   display: block;
   width: 100%;

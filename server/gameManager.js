@@ -157,6 +157,7 @@ function buildOddColorSanitized(q, oddIndex) {
     question: q.question,
     timeLimitSec: q.timeLimitSec ?? 20,
     points: q.points ?? 1000,
+    anyAnswerCorrect: !!q.anyAnswerCorrect,
   };
   const baseColor = normalizeOddColorHex(q.baseColor);
   const oddColor = normalizeOddColorHex(q.oddColor);
@@ -174,6 +175,7 @@ function sanitizeQuestionForPlayer(q) {
     question: q.question,
     timeLimitSec: q.timeLimitSec ?? 20,
     points: q.points ?? 1000,
+    anyAnswerCorrect: !!q.anyAnswerCorrect,
   };
   if (q.type === "multiple_choice") {
     const correct = getMcCorrectIndices(q);
@@ -306,6 +308,7 @@ export function getPublicGameState(game, forHost) {
 
 function getRevealPayload(q, game) {
   const explanation = q.explanation ? String(q.explanation) : undefined;
+  const anyAnswerCorrect = !!q.anyAnswerCorrect;
   if (q.type === "odd_color_out") {
     const idx = game?.oddColorIndex;
     const out = {
@@ -313,6 +316,7 @@ function getRevealPayload(q, game) {
       baseColor: normalizeOddColorHex(q.baseColor),
       oddColor: normalizeOddColorHex(q.oddColor),
     };
+    if (anyAnswerCorrect) out.anyAnswerCorrect = true;
     if (explanation) out.explanation = explanation;
     return out;
   }
@@ -321,11 +325,13 @@ function getRevealPayload(q, game) {
     const labels = (q.options || []).map((raw) => normMcEntry(raw).text);
     const out = { correctIndices, correctLabels: correctIndices.map((i) => labels[i]).filter(Boolean) };
     if (correctIndices.length === 1) out.correctIndex = correctIndices[0];
+    if (anyAnswerCorrect) out.anyAnswerCorrect = true;
     if (explanation) out.explanation = explanation;
     return out;
   }
   if (q.type === "slider") {
     const out = { correctValue: q.correctValue, tolerance: q.tolerance ?? 0 };
+    if (anyAnswerCorrect) out.anyAnswerCorrect = true;
     if (explanation) out.explanation = explanation;
     return out;
   }
@@ -333,11 +339,13 @@ function getRevealPayload(q, game) {
     const out = {
       correctRegion: q.correctRegion,
     };
+    if (anyAnswerCorrect) out.anyAnswerCorrect = true;
     if (explanation) out.explanation = explanation;
     return out;
   }
   if (q.type === "order") {
     const out = { correctOrder: q.correctOrder, items: q.items };
+    if (anyAnswerCorrect) out.anyAnswerCorrect = true;
     if (explanation) out.explanation = explanation;
     return out;
   }
@@ -350,9 +358,12 @@ function getRevealPayload(q, game) {
       return a || b || "";
     }).filter(Boolean);
     const out = { matchLines, pairs };
+    if (anyAnswerCorrect) out.anyAnswerCorrect = true;
     if (explanation) out.explanation = explanation;
     return out;
   }
+  if (anyAnswerCorrect && explanation) return { anyAnswerCorrect: true, explanation };
+  if (anyAnswerCorrect) return { anyAnswerCorrect: true };
   return explanation ? { explanation } : {};
 }
 
@@ -412,7 +423,9 @@ export function gradeAnswer(game, playerId, answer, elapsedMs) {
   let mcExpected = [];
   /** @type {number[]} */
   let mcGot = [];
-  if (q.type === "multiple_choice") {
+  if (q.anyAnswerCorrect) {
+    correct = true;
+  } else if (q.type === "multiple_choice") {
     mcExpected = getMcCorrectIndices(q);
     mcGot = normalizeMcAnswer(answer);
     correct = arraysEqual(mcExpected, mcGot);

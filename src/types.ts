@@ -26,6 +26,8 @@ export type McOption = {
 
 type QCommon = {
   explanation?: string;
+  /** If true, any submitted answer is treated as correct (fun/joke questions). */
+  anyAnswerCorrect?: boolean;
   /** For slider / click / order only. Multiple choice uses `mcPenaltyPoints` + per-option checkboxes. */
   penaltyOnWrong?: boolean;
   penaltyPoints?: number;

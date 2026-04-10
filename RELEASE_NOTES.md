@@ -1,3 +1,6 @@
 # Release notes
 
-- Describe what changed in this release.
+Replaced · separator with -
+Drag and drop order
+Every answer is correct choice option
+Zoom on image question

@@ -438,6 +438,9 @@ export default function Host() {
               </span>
               <HostTimer state={state} />
             </div>
+            {(state.question as { anyAnswerCorrect?: boolean }).anyAnswerCorrect ? (
+              <p className="kh-host-joke-badge">Joke round: any answer is correct</p>
+            ) : null}
             <h2>{String(state.question.question)}</h2>
             <HostMcQuestionImage q={state.question} />
             <HostQuestionPreview q={state.question} reveal={state.reveal} />
@@ -471,9 +474,9 @@ export default function Host() {
             <ol className="kh-host-lb">
               {[...state.players]
                 .sort((a, b) => b.score - a.score)
-                .map((p, i) => (
+                .map((p) => (
                   <li key={p.id}>
-                    {i + 1}. {p.name} · {p.score}
+                    {p.name} - {p.score}
                   </li>
                 ))}
             </ol>
@@ -491,9 +494,9 @@ export default function Host() {
             <ol className="kh-host-lb">
               {[...state.players]
                 .sort((a, b) => b.score - a.score)
-                .map((p, i) => (
+                .map((p) => (
                   <li key={p.id}>
-                    {i + 1}. {p.name} · {p.score}
+                    {p.name} - {p.score}
                   </li>
                 ))}
             </ol>
@@ -557,6 +560,16 @@ function HostQuestionPreview({
 }) {
   const t = q.type as string;
   const expl = reveal && typeof reveal.explanation === "string" ? reveal.explanation : null;
+  const anyAnswerCorrect = !!(reveal && reveal.anyAnswerCorrect === true);
+
+  if (showCorrect && anyAnswerCorrect) {
+    return (
+      <>
+        <p className="kh-reveal-line">Joke round: any answer was treated as correct.</p>
+        {expl ? <RevealExplanation text={expl} /> : null}
+      </>
+    );
+  }
 
   if (t === "multiple_choice" && showCorrect && reveal) {
     const fromPayload = Array.isArray(reveal.correctLabels) ? (reveal.correctLabels as string[]) : [];

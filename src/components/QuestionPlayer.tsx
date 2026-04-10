@@ -56,6 +56,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
   const [matchPairs, setMatchPairs] = useState<Map<number, number>>(new Map());
   const [matchPendingLeft, setMatchPendingLeft] = useState<number | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const [clickZoom, setClickZoom] = useState(1);
   const qpDebugCtxRef = useRef({
     pin: "",
     questionIndex: -1,
@@ -242,6 +243,18 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
     setMatchPairs(new Map());
     setMatchPendingLeft(null);
   }, [matchResetKey]);
+
+  const clickLocationResetKey =
+    state.phase === "question" &&
+    q &&
+    (q as { type: string }).type === "click_location"
+      ? `${state.questionIndex}/${String((q as { imageUrl?: string }).imageUrl || "")}`
+      : "";
+
+  useEffect(() => {
+    if (!clickLocationResetKey) return;
+    setClickZoom(1);
+  }, [clickLocationResetKey]);
 
   const [oddPicked, setOddPicked] = useState<number | null>(null);
   const oddResetKey =
@@ -525,13 +538,50 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
         <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
         <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
         <p className="qp-hint">Tap the correct spot on the image.</p>
+        <div className="qp-click-zoom-controls">
+          <button
+            type="button"
+            className="kh-btn kh-btn-outline kh-btn-sm"
+            disabled={clickZoom <= 1}
+            onClick={() => setClickZoom((z) => Math.max(1, Number((z - 0.5).toFixed(2))))}
+          >
+            −
+          </button>
+          <span className="qp-click-zoom-label">{Math.round(clickZoom * 100)}%</span>
+          <button
+            type="button"
+            className="kh-btn kh-btn-outline kh-btn-sm"
+            disabled={clickZoom >= 4}
+            onClick={() => setClickZoom((z) => Math.min(4, Number((z + 0.5).toFixed(2))))}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="kh-btn kh-btn-outline kh-btn-sm"
+            disabled={clickZoom === 1}
+            onClick={() => setClickZoom(1)}
+          >
+            Reset
+          </button>
+        </div>
+        <p className="qp-click-zoom-hint">Zoom and drag to pan, then tap the exact spot.</p>
         <div
           className="qp-click"
           onClick={onImgClick}
           role="presentation"
         >
           {url ? (
-            <img ref={imgRef} src={url} alt="" className="qp-click-img" draggable={false} />
+            <div className="qp-click-pan">
+              <img
+                ref={imgRef}
+                src={url}
+                alt=""
+                className="qp-click-img"
+                draggable={false}
+                style={{ width: `${clickZoom * 100}%`, maxWidth: "none" }}
+              />
+            </div>
           ) : (
             <div className="qp-noimg">No image</div>
           )}

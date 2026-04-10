@@ -771,6 +771,19 @@ button {
   color: #555;
 }
 
+.kh-host-joke-badge {
+  display: inline-block;
+  margin: 0 0 0.6rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #5a2b00;
+  background: #ffe08a;
+  border: 1px solid #f2c457;
+}
+
 .kh-host-timer {
   font-size: 1.25rem;
   color: var(--camoot-pink);
@@ -1118,7 +1131,8 @@ button {
   margin: 0.5rem 0 0;
 }
 
-.kh-order-edit li {
+.kh-order-edit li,
+.kh-order-edit-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1126,6 +1140,23 @@ button {
   gap: 0.5rem;
   padding: 0.35rem 0;
   border-bottom: 1px solid #eee;
+}
+
+.kh-order-edit-grip {
+  opacity: 0.55;
+  font-size: 0.95rem;
+  letter-spacing: -2px;
+  user-select: none;
+  cursor: grab;
+}
+
+.kh-order-edit-item.is-dragging {
+  opacity: 0.55;
+}
+
+.kh-order-edit-item.is-drop-target {
+  border-bottom-color: var(--camoot-blue);
+  box-shadow: inset 0 -2px 0 var(--camoot-blue);
 }
 
 .kh-order-edit-btns {
