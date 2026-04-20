@@ -504,6 +504,27 @@ io.on("connection", (socket) => {
     broadcastGame(game);
   });
 
+  socket.on("host_next_quiz", ({ quizId } = {}) => {
+    const pin = socket.data.pin;
+    const game = gameManager.getGameByPin(pin);
+    if (!game || socket.data.role !== "host") return;
+    if (game.hostToken !== socket.data.hostToken) return;
+    if (game.phase !== "ended") return;
+    const nextQuizId = String(quizId || "").trim();
+    if (!nextQuizId) {
+      socket.emit("error", { message: "quizId required" });
+      return;
+    }
+    clearQuestionDeadline(pin);
+    const swapped = gameManager.restartGameWithQuiz(game, nextQuizId);
+    if (!swapped.ok) {
+      socket.emit("error", { message: swapped.error || "Could not start next quiz" });
+      return;
+    }
+    log("host_next_quiz", game.pin, { quizId: nextQuizId, players: game.players.size });
+    broadcastGame(game);
+  });
+
   socket.on("player_answer", (payload = {}) => {
     const { answer, questionIndex: rawQIdx, clientTime: rawClientTime } = payload;
     const pin = socket.data.pin;

@@ -57,6 +57,27 @@ export function createGame(quizId) {
   return { pin, hostToken, quizTitle: quiz.title };
 }
 
+/**
+ * Keep the same lobby/players/pin but swap to a different quiz and reset scores.
+ * @returns {{ ok: boolean, error?: string, quizTitle?: string }}
+ */
+export function restartGameWithQuiz(game, quizId) {
+  const quiz = getQuiz(quizId);
+  if (!quiz) return { ok: false, error: "Quiz not found" };
+  game.quizId = quizId;
+  game.quizSnapshot = JSON.parse(JSON.stringify(quiz));
+  game.phase = "lobby";
+  game.questionIndex = -1;
+  game.startedAt = null;
+  game.answers = new Map();
+  game.playerQuestionSanitized = null;
+  game.oddColorIndex = null;
+  for (const p of game.players.values()) {
+    p.score = 0;
+  }
+  return { ok: true, quizTitle: quiz.title };
+}
+
 export function getGameByPin(pin) {
   return games.get(pin) || null;
 }

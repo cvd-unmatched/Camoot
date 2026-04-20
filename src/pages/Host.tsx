@@ -38,10 +38,13 @@ export default function Host() {
   const [quizzes, setQuizzes] = useState<QuizRow[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [startingId, setStartingId] = useState<string | null>(null);
+  const [nextQuizId, setNextQuizId] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
   /** Shown on the quiz picker when saved host session (PIN/token) no longer exists on the server */
   const [lobbyExpiredMsg, setLobbyExpiredMsg] = useState<string | null>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
+  const hostMusicPlayRef = useRef<(() => void) | null>(null);
+  const queuedMusicPlayRef = useRef(false);
   /** True until the first `state` after this host session connected (detect stale ended games on /host revisit). */
   const awaitingInitialHostState = useRef(false);
 
@@ -68,6 +71,29 @@ export default function Host() {
       cancelled = true;
     };
   }, [token, hostSession]);
+
+  useEffect(() => {
+    if (!token || !hostSession || state?.phase !== "ended") return;
+    if (quizzes.length > 0) return;
+    let cancelled = false;
+    listQuizzes(token)
+      .then((list) => {
+        if (!cancelled) setQuizzes(list);
+      })
+      .catch(() => {
+        /* ignore; host can still return home */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, hostSession, state?.phase, quizzes.length]);
+
+  useEffect(() => {
+    if (quizzes.length === 0) return;
+    if (!nextQuizId || !quizzes.some((q) => q.id === nextQuizId)) {
+      setNextQuizId(quizzes[0].id);
+    }
+  }, [quizzes, nextQuizId]);
 
   useEffect(() => {
     if (!hostSession) return;
@@ -200,11 +226,13 @@ export default function Host() {
 
   const hostStart = () => {
     if (!state || state.players.length < 1) return;
+    queuedMusicPlayRef.current = true;
     resumeSounds();
     playGameStart();
     getSocket().emit("host_start");
   };
   const hostNext = () => {
+    queuedMusicPlayRef.current = true;
     resumeSounds();
     playHostStep();
     getSocket().emit("host_next");
@@ -216,6 +244,20 @@ export default function Host() {
     resumeSounds();
     getSocket().emit("host_end_quiz");
   };
+  const hostStartNextQuiz = () => {
+    if (!nextQuizId) return;
+    resumeSounds();
+    playPickQuiz();
+    getSocket().emit("host_next_quiz", { quizId: nextQuizId });
+  };
+
+  useEffect(() => {
+    if (!state || state.phase !== "question") return;
+    if ((state.question as { type?: string } | null)?.type !== "music") return;
+    if (!queuedMusicPlayRef.current) return;
+    queuedMusicPlayRef.current = false;
+    hostMusicPlayRef.current?.();
+  }, [state?.phase, state?.questionIndex, state?.question]);
 
   const copyInviteLink = async () => {
     if (!state?.pin) return;
@@ -443,7 +485,13 @@ export default function Host() {
             ) : null}
             <h2>{String(state.question.question)}</h2>
             <HostMcQuestionImage q={state.question} />
-            <HostQuestionPreview q={state.question} reveal={state.reveal} />
+            <HostQuestionPreview
+              q={state.question}
+              reveal={state.reveal}
+              registerMusicPlay={(play) => {
+                hostMusicPlayRef.current = play;
+              }}
+            />
             <p className="kh-host-q-responses-label">Responses</p>
             <ul className="kh-host-q-responses" aria-label="Who has answered">
               {state.players.map((p) => (
@@ -457,6 +505,16 @@ export default function Host() {
               ))}
             </ul>
             <p className="kh-host-hint">Players answer on their devices.</p>
+            {(state.question as { type?: string }).type === "music" ? (
+              <button
+                type="button"
+                className="kh-btn kh-btn-outline kh-btn-block"
+                style={{ marginBottom: "0.5rem" }}
+                onClick={() => hostMusicPlayRef.current?.()}
+              >
+                Play / replay clip
+              </button>
+            ) : null}
             <button type="button" className="kh-btn kh-btn-primary kh-btn-block" onClick={hostNext}>
               Show answers
             </button>
@@ -500,6 +558,34 @@ export default function Host() {
                   </li>
                 ))}
             </ol>
+            <div style={{ marginTop: "1rem" }}>
+              <h3 style={{ margin: "0 0 0.5rem", fontSize: "1.05rem" }}>Start another quiz with same players</h3>
+              <p className="kh-host-hint" style={{ marginTop: 0 }}>
+                Keeps this lobby and PIN alive so connected players do not need to rejoin.
+              </p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <select
+                  className="kh-input"
+                  value={nextQuizId}
+                  onChange={(e) => setNextQuizId(e.target.value)}
+                  style={{ minWidth: 260, flex: "1 1 260px" }}
+                >
+                  {quizzes.map((q) => (
+                    <option key={q.id} value={q.id}>
+                      {q.title} ({q.questionCount})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="kh-btn kh-btn-primary"
+                  disabled={!nextQuizId}
+                  onClick={hostStartNextQuiz}
+                >
+                  Go to lobby
+                </button>
+              </div>
+            </div>
             <div className="kh-nav-home-wrap is-center" style={{ marginTop: "1.25rem" }}>
               <NavHome />
             </div>
@@ -552,12 +638,27 @@ function RevealExplanation({ text }: { text: string }) {
 function HostMusicAudio({
   src,
   autoStart,
+  registerPlay,
 }: {
   src: string;
   autoStart: boolean;
+  registerPlay?: (play: (() => void) | null) => void;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const playedKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    const play = () => {
+      const el = audioRef.current;
+      if (!el) return;
+      el.currentTime = 0;
+      void el.play().catch(() => {
+        // Browser may still block if this wasn't called from a user gesture.
+      });
+    };
+    registerPlay?.(play);
+    return () => registerPlay?.(null);
+  }, [registerPlay, src]);
 
   useEffect(() => {
     if (!autoStart || !src) return;
@@ -566,10 +667,13 @@ function HostMusicAudio({
     playedKeyRef.current = key;
     const el = audioRef.current;
     if (!el) return;
-    el.currentTime = 0;
-    void el.play().catch(() => {
-      // If browser blocks autoplay, host can still press Play manually.
-    });
+    const play = () => {
+      el.currentTime = 0;
+      void el.play().catch(() => {
+        // If browser blocks autoplay, host can still press Play manually.
+      });
+    };
+    play();
   }, [autoStart, src]);
 
   return (
@@ -583,10 +687,12 @@ function HostQuestionPreview({
   q,
   reveal,
   showCorrect,
+  registerMusicPlay,
 }: {
   q: Record<string, unknown>;
   reveal?: Record<string, unknown>;
   showCorrect?: boolean;
+  registerMusicPlay?: (play: (() => void) | null) => void;
 }) {
   const t = q.type as string;
   const expl = reveal && typeof reveal.explanation === "string" ? reveal.explanation : null;
@@ -671,7 +777,7 @@ function HostQuestionPreview({
           </div>
         ) : null}
         {typeof q.audioUrl === "string" && q.audioUrl.trim() !== "" ? (
-          <HostMusicAudio src={q.audioUrl} autoStart={!showCorrect} />
+          <HostMusicAudio src={q.audioUrl} autoStart={!showCorrect} registerPlay={registerMusicPlay} />
         ) : (
           <p className="kh-host-hint">Add an audio clip URL to play this round.</p>
         )}
