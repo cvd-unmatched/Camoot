@@ -549,6 +549,36 @@ function RevealExplanation({ text }: { text: string }) {
   );
 }
 
+function HostMusicAudio({
+  src,
+  autoStart,
+}: {
+  src: string;
+  autoStart: boolean;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const playedKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!autoStart || !src) return;
+    const key = `${autoStart ? "1" : "0"}:${src}`;
+    if (playedKeyRef.current === key) return;
+    playedKeyRef.current = key;
+    const el = audioRef.current;
+    if (!el) return;
+    el.currentTime = 0;
+    void el.play().catch(() => {
+      // If browser blocks autoplay, host can still press Play manually.
+    });
+  }, [autoStart, src]);
+
+  return (
+    <audio ref={audioRef} controls preload="metadata" style={{ width: "100%", marginBottom: "0.65rem" }}>
+      <source src={src} />
+    </audio>
+  );
+}
+
 function HostQuestionPreview({
   q,
   reveal,
@@ -641,9 +671,7 @@ function HostQuestionPreview({
           </div>
         ) : null}
         {typeof q.audioUrl === "string" && q.audioUrl.trim() !== "" ? (
-          <audio controls preload="metadata" style={{ width: "100%", marginBottom: "0.65rem" }}>
-            <source src={q.audioUrl} />
-          </audio>
+          <HostMusicAudio src={q.audioUrl} autoStart={!showCorrect} />
         ) : (
           <p className="kh-host-hint">Add an audio clip URL to play this round.</p>
         )}
