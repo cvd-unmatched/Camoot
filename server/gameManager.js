@@ -98,6 +98,10 @@ function mcOptsLen(q) {
   return (q.options || []).length;
 }
 
+function normalizeMusicOptions(q) {
+  return Array.isArray(q.options) ? q.options.map((x) => String(x ?? "")) : [];
+}
+
 function getMcPenaltyTotal(q) {
   return Math.max(0, Number(q.mcPenaltyPoints ?? 0) || 0);
 }
@@ -206,6 +210,19 @@ function sanitizeQuestionForPlayer(q) {
       step: q.step ?? 1,
     };
   }
+  if (q.type === "music") {
+    const options = normalizeMusicOptions(q);
+    return {
+      ...base,
+      options,
+      correctIndex: Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex < options.length ? q.correctIndex : 0,
+      coverImageUrl: q.coverImageUrl ? String(q.coverImageUrl) : undefined,
+      trackNumber: Number.isFinite(Number(q.trackNumber)) ? Number(q.trackNumber) : undefined,
+      artist: q.showArtist !== false ? String(q.artist ?? "").trim() || undefined : undefined,
+      title: q.showTitle !== false ? String(q.title ?? "").trim() || undefined : undefined,
+      showCoverArt: q.showCoverArt !== false,
+    };
+  }
   if (q.type === "click_location") {
     return {
       ...base,
@@ -272,6 +289,13 @@ export function getPublicGameState(game, forHost) {
   const questions = qs.questions || [];
   const q = questions[game.questionIndex];
   const playerQuestion = game.phase === "lobby" ? null : game.playerQuestionSanitized;
+  let outQuestion = playerQuestion;
+  if (forHost && q && playerQuestion && q.type === "music" && playerQuestion.type === "music") {
+    outQuestion = {
+      ...playerQuestion,
+      audioUrl: q.audioUrl ? String(q.audioUrl) : "",
+    };
+  }
 
   const players = [...game.players.values()].map((p) => {
     const row = { id: p.id, name: p.name, score: p.score };
@@ -291,7 +315,7 @@ export function getPublicGameState(game, forHost) {
     totalQuestions: questions.length,
     quizTitle: qs.title,
     players,
-    question: game.phase === "lobby" ? null : playerQuestion,
+    question: game.phase === "lobby" ? null : outQuestion,
     questionStartedAt: game.phase === "question" ? game.startedAt : null,
     serverTime: Date.now(),
   };
@@ -325,6 +349,20 @@ function getRevealPayload(q, game) {
     const labels = (q.options || []).map((raw) => normMcEntry(raw).text);
     const out = { correctIndices, correctLabels: correctIndices.map((i) => labels[i]).filter(Boolean) };
     if (correctIndices.length === 1) out.correctIndex = correctIndices[0];
+    if (anyAnswerCorrect) out.anyAnswerCorrect = true;
+    if (explanation) out.explanation = explanation;
+    return out;
+  }
+  if (q.type === "music") {
+    const options = normalizeMusicOptions(q);
+    const idx = Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex < options.length ? q.correctIndex : 0;
+    const out = {
+      correctIndex: idx,
+      correctLabel: options[idx] || "",
+      artist: String(q.artist ?? "").trim() || undefined,
+      title: String(q.title ?? "").trim() || undefined,
+      trackNumber: Number.isFinite(Number(q.trackNumber)) ? Number(q.trackNumber) : undefined,
+    };
     if (anyAnswerCorrect) out.anyAnswerCorrect = true;
     if (explanation) out.explanation = explanation;
     return out;
@@ -439,6 +477,11 @@ export function gradeAnswer(game, playerId, answer, elapsedMs) {
         partialPoints = Math.round(base * (hitCount / mcExpected.length));
       }
     }
+  } else if (q.type === "music") {
+    const options = normalizeMusicOptions(q);
+    const idx = Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex < options.length ? q.correctIndex : 0;
+    const got = Number(answer);
+    correct = Number.isInteger(got) && got === idx;
   } else if (q.type === "slider") {
     const v = Number(answer);
     const tol = q.tolerance ?? 0;

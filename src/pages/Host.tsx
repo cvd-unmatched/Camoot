@@ -600,6 +600,61 @@ function HostQuestionPreview({
       );
     }
   }
+  if (t === "music") {
+    const opts = Array.isArray(q.options) ? (q.options as string[]) : [];
+    const artist = String(q.artist ?? "").trim();
+    const title = String(q.title ?? "").trim();
+    const trackNumber = q.trackNumber;
+    if (showCorrect && reveal) {
+      const label =
+        typeof reveal.correctLabel === "string"
+          ? String(reveal.correctLabel)
+          : typeof reveal.correctIndex === "number"
+            ? opts[reveal.correctIndex as number]
+            : "";
+      return (
+        <>
+          {label ? <p className="kh-reveal-line">Correct: {label}</p> : null}
+          {(artist || title || typeof trackNumber === "number") ? (
+            <p className="kh-reveal-line">
+              {typeof trackNumber === "number" ? `#${trackNumber}` : ""}
+              {typeof trackNumber === "number" && (artist || title) ? " - " : ""}
+              {[artist, title].filter(Boolean).join(" - ")}
+            </p>
+          ) : null}
+          {expl ? <RevealExplanation text={expl} /> : null}
+        </>
+      );
+    }
+    return (
+      <>
+        {(artist || title || typeof trackNumber === "number") ? (
+          <p className="kh-reveal-line">
+            {typeof trackNumber === "number" ? `#${trackNumber}` : ""}
+            {typeof trackNumber === "number" && (artist || title) ? " - " : ""}
+            {[artist, title].filter(Boolean).join(" - ")}
+          </p>
+        ) : null}
+        {typeof q.coverImageUrl === "string" && q.coverImageUrl.trim() !== "" ? (
+          <div className="kh-host-click-preview" style={{ maxWidth: 260 }}>
+            <img src={q.coverImageUrl} alt="" />
+          </div>
+        ) : null}
+        {typeof q.audioUrl === "string" && q.audioUrl.trim() !== "" ? (
+          <audio controls preload="metadata" style={{ width: "100%", marginBottom: "0.65rem" }}>
+            <source src={q.audioUrl} />
+          </audio>
+        ) : (
+          <p className="kh-host-hint">Add an audio clip URL to play this round.</p>
+        )}
+        <ul className="kh-host-options">
+          {opts.map((o, i) => (
+            <li key={i}>{o}</li>
+          ))}
+        </ul>
+      </>
+    );
+  }
   if (t === "slider" && showCorrect && reveal) {
     return (
       <>

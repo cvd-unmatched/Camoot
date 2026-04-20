@@ -1,5 +1,6 @@
 export type QuestionType =
   | "multiple_choice"
+  | "music"
   | "slider"
   | "click_location"
   | "order"
@@ -47,6 +48,27 @@ export type QuizQuestion =
       mcPenaltyPoints?: number;
       /** If true (default), each player sees options in a random order. */
       shuffleOptions?: boolean;
+      timeLimitSec?: number;
+      points?: number;
+    })
+  | (QCommon & {
+      id: string;
+      type: "music";
+      question: string;
+      /** Host-only playback clip URL (typically `/uploads/...`). */
+      audioUrl: string;
+      /** Optional artwork shown to players/host when enabled. */
+      coverImageUrl?: string;
+      /** Optional metadata text (can be hidden per-question). */
+      artist?: string;
+      title?: string;
+      trackNumber?: number;
+      /** Controls which metadata is shown during the question. */
+      showArtist?: boolean;
+      showTitle?: boolean;
+      showCoverArt?: boolean;
+      options: string[];
+      correctIndex: number;
       timeLimitSec?: number;
       points?: number;
     })

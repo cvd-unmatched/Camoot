@@ -44,6 +44,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
   const mcSelectedRef = useRef<number[]>([]);
   const [singlePickedId, setSinglePickedId] = useState<number | null>(null);
   const singlePickedRef = useRef<number | null>(null);
+  const [mcSubmittedSig, setMcSubmittedSig] = useState<string | null>(null);
+  const [musicPickedId, setMusicPickedId] = useState<number | null>(null);
+  const musicPickedRef = useRef<number | null>(null);
+  const [musicSubmittedId, setMusicSubmittedId] = useState<number | null>(null);
   const mcAutoTimeSubmitRef = useRef(false);
   /** One graded answer per question; blocks double pointerdown+click and stacked playSubmit() on mobile. */
   const answerSentRef = useRef(false);
@@ -194,8 +198,10 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       setSinglePickedId(null);
       mcSelectedRef.current = [];
       singlePickedRef.current = null;
+      setMcSubmittedSig(null);
       return;
     }
+    setMcSubmittedSig(null);
     if (mcResetKey.includes("/M/")) {
       setMcSelected([]);
       mcSelectedRef.current = [];
@@ -204,6 +210,25 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       singlePickedRef.current = null;
     }
   }, [mcResetKey]);
+
+  const musicResetKey =
+    state.phase === "question" &&
+    q &&
+    (q as { type: string }).type === "music"
+      ? `${state.questionIndex}/${((q as { options?: string[] }).options || []).length}`
+      : "";
+
+  useEffect(() => {
+    if (!musicResetKey) {
+      setMusicPickedId(null);
+      setMusicSubmittedId(null);
+      musicPickedRef.current = null;
+      return;
+    }
+    setMusicPickedId(null);
+    setMusicSubmittedId(null);
+    musicPickedRef.current = null;
+  }, [musicResetKey]);
 
   const mcIsMulti =
     q &&
@@ -393,6 +418,8 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
         return next;
       });
     };
+    const getMultiSig = () => [...mcSelectedRef.current].sort((a, b) => a - b).join(",");
+    const getSingleSig = () => (singlePickedRef.current === null ? "" : String(singlePickedRef.current));
     const submitMc = () => {
       const ids = mcSelectedRef.current;
       camootLog("qp", "mc submit multi attempt", mcDbg({ ids: [...ids] }));
@@ -402,6 +429,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       }
       if (!tryTakeAnswerLock("mc_multi_submit")) return;
       playSubmit();
+      setMcSubmittedSig(getMultiSig());
       onSubmit(ids);
     };
     const pickSingleMc = (originalId: number) => {
@@ -419,6 +447,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
       }
       if (!tryTakeAnswerLock("mc_single_submit")) return;
       playSubmit();
+      setMcSubmittedSig(getSingleSig());
       onSubmit(id);
     };
     const mcImageUrl = (q as { imageUrl?: string }).imageUrl;
@@ -467,7 +496,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           <button
             type="button"
             className="kh-btn kh-btn-primary qp-submit"
-            disabled={disabled || mcSelected.length === 0}
+            disabled={disabled || mcSelected.length === 0 || mcSubmittedSig === getMultiSig()}
             onClick={(e) => {
               camootLog("qp", "mc submit click (multi)", mcDbg({ detail: e.detail }));
               submitMc();
@@ -479,7 +508,7 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
           <button
             type="button"
             className="kh-btn kh-btn-primary qp-submit"
-            disabled={disabled || singlePickedId === null}
+            disabled={disabled || singlePickedId === null || mcSubmittedSig === getSingleSig()}
             onClick={(e) => {
               camootLog("qp", "mc submit click (single)", mcDbg({ detail: e.detail }));
               submitSingleMc();
@@ -535,6 +564,75 @@ export default function QuestionPlayer({ state, disabled, onSubmit }: Props) {
             Lock in
           </button>
         </div>
+      </div>
+    );
+  }
+
+  if (qt === "music") {
+    const options = Array.isArray((q as { options?: string[] }).options)
+      ? ((q as { options: string[] }).options || []).map((x) => String(x))
+      : [];
+    const coverImageUrl =
+      (q as { showCoverArt?: boolean }).showCoverArt !== false
+        ? String((q as { coverImageUrl?: string }).coverImageUrl || "")
+        : "";
+    const artist = String((q as { artist?: string }).artist || "").trim();
+    const title = String((q as { title?: string }).title || "").trim();
+    const trackNumber = (q as { trackNumber?: number }).trackNumber;
+    const submitMusic = () => {
+      const id = musicPickedRef.current;
+      if (id === null || disabled) return;
+      if (!tryTakeAnswerLock("music_submit")) return;
+      playSubmit();
+      setMusicSubmittedId(id);
+      onSubmit(id);
+    };
+    return (
+      <div className={qpWrapClass}>
+        <div className="qp-timer">{timeLeft !== null ? `${timeLeft}s` : ""}</div>
+        <h2 className="qp-qtext">{String((q as { question: string }).question)}</h2>
+        {coverImageUrl ? (
+          <div className="qp-mc-figure">
+            <img className="qp-mc-qimage" src={coverImageUrl} alt="" decoding="async" />
+          </div>
+        ) : null}
+        {(artist || title || typeof trackNumber === "number") && (
+          <p className="qp-mc-hint">
+            {typeof trackNumber === "number" ? `#${trackNumber}` : ""}
+            {typeof trackNumber === "number" && (artist || title) ? " - " : ""}
+            {[artist, title].filter(Boolean).join(" - ")}
+          </p>
+        )}
+        <div className={"qp-mc-grid" + (disabled ? " qp-mc-grid-locked" : "")}>
+          {options.map((opt, idx) => {
+            const selected = musicPickedId === idx;
+            return (
+              <button
+                key={`${idx}-${opt}`}
+                type="button"
+                className={"qp-mc-btn" + (selected ? " qp-mc-btn-selected" : "")}
+                style={{ background: COLORS[idx % COLORS.length] }}
+                disabled={disabled}
+                onClick={() => {
+                  playUiTapSound();
+                  setMusicPickedId(idx);
+                  musicPickedRef.current = idx;
+                }}
+              >
+                <span className={"qp-shape" + (selected ? " qp-shape-checked" : "")} aria-hidden />
+                {opt}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          className="kh-btn kh-btn-primary qp-submit"
+          disabled={disabled || musicPickedId === null || musicPickedId === musicSubmittedId}
+          onClick={submitMusic}
+        >
+          Submit answer
+        </button>
       </div>
     );
   }

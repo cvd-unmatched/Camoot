@@ -55,6 +55,11 @@ const QUESTION_KIND: Record<QuizQuestion["type"], { label: string; tooltip: stri
     tooltip:
       "Multiple choice: players pick one or more answers from the options you list (correct answers can be marked as traps with a penalty).",
   },
+  music: {
+    label: "Music",
+    tooltip:
+      "Music clip: host plays an uploaded audio sample, players pick from options. You can hide artist/title for guessing rounds.",
+  },
   slider: {
     label: "Slider",
     tooltip: "Numeric slider: players drag to a value between your min and max; you set the correct value and optional tolerance.",
@@ -82,6 +87,7 @@ const QUESTION_KIND: Record<QuizQuestion["type"], { label: string; tooltip: stri
 
 const ADD_QUESTION_TYPES: QuizQuestion["type"][] = [
   "multiple_choice",
+  "music",
   "slider",
   "click_location",
   "order",
@@ -374,6 +380,23 @@ function QuizEditor({
         step: 1,
         correctValue: 50,
         tolerance: 0,
+      };
+    }
+    if (type === "music") {
+      return {
+        ...base,
+        type: "music",
+        question: "Who is this song by?",
+        audioUrl: "",
+        coverImageUrl: "https://picsum.photos/seed/musiccover/420/420",
+        artist: "Unknown Artist",
+        title: "Unknown Track",
+        trackNumber: 1,
+        showArtist: false,
+        showTitle: false,
+        showCoverArt: true,
+        options: ["Artist A", "Artist B", "Artist C", "Artist D"],
+        correctIndex: 0,
       };
     }
     if (type === "click_location") {
@@ -726,11 +749,22 @@ function QuestionFields({
 }) {
   const [uploading, setUploading] = useState(false);
 
-  const upload = async (file: File) => {
+  const uploadImage = async (file: File) => {
     setUploading(true);
     try {
       const { url } = await api.uploadImage(token, file);
       onChange({ imageUrl: url } as Partial<QuizQuestion>);
+    } catch {
+      alert("Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+  const uploadAudio = async (file: File) => {
+    setUploading(true);
+    try {
+      const { url } = await api.uploadAudio(token, file);
+      onChange({ audioUrl: url } as Partial<QuizQuestion>);
     } catch {
       alert("Upload failed");
     } finally {
@@ -866,7 +900,7 @@ function QuestionFields({
             disabled={uploading}
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) void upload(f);
+              if (f) void uploadImage(f);
             }}
             style={{ marginBottom: "0.5rem" }}
           />
@@ -889,6 +923,180 @@ function QuestionFields({
             ) : null}
           </div>
           <McEditor q={question} onChange={onChange} />
+        </>
+      )}
+      {question.type === "music" && (
+        <>
+          <label style={{ display: "block", marginTop: "0.25rem", fontWeight: 600 }}>
+            Audio clip (host playback only)
+          </label>
+          <input
+            className="kh-input"
+            value={question.audioUrl}
+            onChange={(e) =>
+              onChange({
+                audioUrl: e.target.value.trim(),
+              } as Partial<QuizQuestion>)
+            }
+            placeholder="/uploads/… or https://…"
+            style={{ marginBottom: "0.5rem" }}
+          />
+          <input
+            type="file"
+            accept="audio/*"
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void uploadAudio(f);
+            }}
+            style={{ marginBottom: "0.5rem" }}
+          />
+          {question.audioUrl?.trim() ? (
+            <audio controls preload="metadata" style={{ width: "100%", marginBottom: "0.75rem" }}>
+              <source src={question.audioUrl.trim()} />
+            </audio>
+          ) : (
+            <p style={{ fontSize: "0.88rem", color: "#666", margin: "0.25rem 0 0.75rem" }}>
+              Upload an audio clip or paste its URL.
+            </p>
+          )}
+          <label style={{ display: "block", marginTop: "0.25rem", fontWeight: 600 }}>Cover image (optional)</label>
+          <input
+            className="kh-input"
+            value={question.coverImageUrl ?? ""}
+            onChange={(e) =>
+              onChange({
+                coverImageUrl: e.target.value.trim() === "" ? undefined : e.target.value.trim(),
+              } as Partial<QuizQuestion>)
+            }
+            placeholder="/uploads/… or https://…"
+            style={{ marginBottom: "0.5rem" }}
+          />
+          <input
+            type="file"
+            accept="image/*"
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void uploadImage(f);
+            }}
+            style={{ marginBottom: "0.5rem" }}
+          />
+          <div className="kh-row">
+            <label>Artist</label>
+            <input
+              className="kh-input"
+              value={question.artist ?? ""}
+              onChange={(e) => onChange({ artist: e.target.value } as Partial<QuizQuestion>)}
+            />
+            <label>Title</label>
+            <input
+              className="kh-input"
+              value={question.title ?? ""}
+              onChange={(e) => onChange({ title: e.target.value } as Partial<QuizQuestion>)}
+            />
+          </div>
+          <div className="kh-row">
+            <label>Track #</label>
+            <input
+              type="number"
+              className="kh-input"
+              value={question.trackNumber ?? 1}
+              onChange={(e) => onChange({ trackNumber: Number(e.target.value) } as Partial<QuizQuestion>)}
+            />
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: "0.75rem",
+              margin: "0.6rem 0 0.85rem",
+            }}
+          >
+            <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <input
+                type="checkbox"
+                checked={question.showArtist !== false}
+                onChange={(e) => onChange({ showArtist: e.target.checked } as Partial<QuizQuestion>)}
+              />
+              Show artist
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <input
+                type="checkbox"
+                checked={question.showTitle !== false}
+                onChange={(e) => onChange({ showTitle: e.target.checked } as Partial<QuizQuestion>)}
+              />
+              Show title
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <input
+                type="checkbox"
+                checked={question.showCoverArt !== false}
+                onChange={(e) => onChange({ showCoverArt: e.target.checked } as Partial<QuizQuestion>)}
+              />
+              Show cover art
+            </label>
+          </div>
+          <span style={{ fontWeight: 600 }}>Answer options:</span>
+          <ul className="kh-order-edit" style={{ marginTop: "0.35rem" }}>
+            {question.options.map((opt, i) => (
+              <li key={i}>
+                <input
+                  className="kh-input kh-order-edit-input"
+                  value={opt}
+                  onChange={(e) => {
+                    const options = [...question.options];
+                    options[i] = e.target.value;
+                    onChange({ options } as Partial<QuizQuestion>);
+                  }}
+                  aria-label={`Music option ${i + 1}`}
+                />
+                <span className="kh-order-edit-btns">
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                    <input
+                      type="radio"
+                      name={`music-correct-${question.id}`}
+                      checked={question.correctIndex === i}
+                      onChange={() => onChange({ correctIndex: i } as Partial<QuizQuestion>)}
+                    />
+                    Correct
+                  </label>
+                  <button
+                    type="button"
+                    className="kh-btn kh-btn-danger kh-btn-sm"
+                    disabled={question.options.length <= 2}
+                    onClick={() => {
+                      if (question.options.length <= 2) return;
+                      const options = question.options.filter((_, j) => j !== i);
+                      const nextCorrect =
+                        question.correctIndex === i
+                          ? 0
+                          : question.correctIndex > i
+                            ? question.correctIndex - 1
+                            : question.correctIndex;
+                      onChange({ options, correctIndex: nextCorrect } as Partial<QuizQuestion>);
+                    }}
+                  >
+                    Remove
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="kh-btn kh-btn-outline kh-btn-sm"
+            style={{ marginTop: "0.35rem" }}
+            onClick={() =>
+              onChange({
+                options: [...question.options, `Option ${question.options.length + 1}`],
+              } as Partial<QuizQuestion>)
+            }
+          >
+            + Add option
+          </button>
         </>
       )}
       {question.type === "slider" && (
@@ -949,7 +1157,7 @@ function QuestionFields({
             disabled={uploading}
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) upload(f);
+              if (f) uploadImage(f);
             }}
           />
           {question.imageUrl?.trim() ? (

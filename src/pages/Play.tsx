@@ -25,6 +25,12 @@ function formatPlayerAnswerForReveal(
       .filter((x): x is string => Boolean(x));
     return texts.length ? texts.join(", ") : null;
   }
+  if (t === "music") {
+    const opts = Array.isArray((q as { options?: string[] }).options) ? ((q as { options: string[] }).options || []) : [];
+    const id = Number(Array.isArray(answer) ? answer[0] : answer);
+    if (!Number.isInteger(id) || id < 0 || id >= opts.length) return null;
+    return String(opts[id] ?? "");
+  }
   if (t === "slider" && typeof answer === "number") return String(answer);
   if (t === "odd_color_out" && typeof answer === "number")
     return `Square ${answer + 1}`;
@@ -121,6 +127,7 @@ export default function Play() {
   const [reconnecting, setReconnecting] = useState(false);
 
   const pendingNameRef = useRef("");
+  const questionResetKeyRef = useRef<string>("");
   const stateRef = useRef<GameState | null>(null);
   const answeredRef = useRef(false);
   const answerSubmittedRef = useRef(false);
@@ -183,13 +190,17 @@ export default function Play() {
         setReconnecting(false);
       }
       if (st.phase === "question") {
-        setAnswered(false);
-        setAnswerSubmitted(false);
-        setLastPoints(null);
-        setLastPenalty(null);
-        setLastCorrect(null);
-        setLastAnswerSummary(null);
-        revealSoundPlayedForKeyRef.current = null;
+        const nextKey = `${st.pin}:${st.questionIndex}`;
+        if (questionResetKeyRef.current !== nextKey) {
+          questionResetKeyRef.current = nextKey;
+          setAnswered(false);
+          setAnswerSubmitted(false);
+          setLastPoints(null);
+          setLastPenalty(null);
+          setLastCorrect(null);
+          setLastAnswerSummary(null);
+          revealSoundPlayedForKeyRef.current = null;
+        }
       }
     };
     const onJoined = (p: { playerId: string; pin: string }) => {
@@ -348,8 +359,6 @@ export default function Play() {
           ? "wrong_phase"
           : answeredRef.current
             ? "already_answered"
-            : answerSubmittedRef.current
-              ? "already_submitted"
               : null;
     if (blocked) {
       camootLog("play", "onAnswer blocked (no emit)", {
@@ -491,9 +500,9 @@ export default function Play() {
             {[...state.players]
               .sort((a, b) => b.score - a.score)
               .slice(0, 5)
-              .map((p, i) => (
+              .map((p) => (
                 <li key={p.id}>
-                  {i + 1}. {p.name} · {p.score}
+                  {p.name} - {p.score}
                 </li>
               ))}
           </ol>
@@ -551,6 +560,9 @@ export default function Play() {
             <p className="kh-reveal-correct">
               Correct: {labels.join(" · ")}
             </p>
+          )}
+          {q?.type === "music" && r && typeof r.correctLabel === "string" && r.correctLabel.trim() !== "" && (
+            <p className="kh-reveal-correct">Correct: {r.correctLabel}</p>
           )}
           {q?.type === "multiple_choice" && r && labels.length === 0 && Array.isArray(r.correctIndices) && (r.correctIndices as number[]).length > 0 && (
             <p>

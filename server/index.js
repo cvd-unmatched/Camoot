@@ -43,6 +43,10 @@ const uploadImage = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
+const uploadAudio = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
 
 app.post("/api/manager/login", (req, res) => {
   const { password } = req.body || {};
@@ -99,6 +103,32 @@ app.post("/api/upload", requireManager, uploadImage.single("file"), async (req, 
       .toFile(dest);
   } catch {
     return res.status(400).json({ error: "Could not process image (use JPEG, PNG, GIF, WebP, etc.)" });
+  }
+  res.json({ url: `/uploads/${filename}` });
+});
+
+app.post("/api/upload-audio", requireManager, uploadAudio.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file" });
+  const mime = String(req.file.mimetype || "").toLowerCase();
+  if (!mime.startsWith("audio/")) {
+    return res.status(400).json({ error: "Audio file required" });
+  }
+  const extByMime = {
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
+    "audio/webm": ".webm",
+  };
+  const ext = extByMime[mime] || path.extname(req.file.originalname || "").toLowerCase() || ".mp3";
+  const filename = `${uuidv4()}${ext}`;
+  const dest = path.join(UPLOAD_DIR, filename);
+  try {
+    await fs.promises.writeFile(dest, req.file.buffer);
+  } catch {
+    return res.status(500).json({ error: "Could not save audio file" });
   }
   res.json({ url: `/uploads/${filename}` });
 });
@@ -540,16 +570,6 @@ io.on("connection", (socket) => {
       });
       return;
     }
-    if (game.answers.has(playerId)) {
-      logPlayerWarn("player_answer REJECT duplicate (already have answer for player)", {
-        pin,
-        playerId,
-        questionIndex,
-        answersInGameMap: game.answers.size,
-      });
-      return;
-    }
-
     const elapsed = Math.max(0, serverNow - (game.startedAt || serverNow));
     const qs = game.quizSnapshot?.questions || [];
     const qNow = qs[game.questionIndex];
@@ -564,8 +584,16 @@ io.on("connection", (socket) => {
       answerSummary,
     });
 
-    gameManager.recordAnswer(game, playerId, { answer, clientTime });
+    const previous = game.answers.get(playerId);
+    if (previous && previous.result) {
+      const p = game.players.get(playerId);
+      if (p) {
+        p.score -= Number(previous.result.points || 0);
+        p.score += Number(previous.result.penalty || 0);
+      }
+    }
     const result = gameManager.gradeAnswer(game, playerId, answer, elapsed);
+    gameManager.recordAnswer(game, playerId, { answer, clientTime, result });
     log("player_answer", pin, { playerId, questionIndex, correct: result.correct, points: result.points });
     logPlayer("player_answer GRADED emit answer_result", {
       pin,

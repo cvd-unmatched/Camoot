@@ -1,3 +1,3 @@
 # Release notes
 
-better zoom and drag on mobile
+- Describe what changed in this release.

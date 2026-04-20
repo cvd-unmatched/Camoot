@@ -78,6 +78,18 @@ export async function uploadImage(token: string, file: File) {
   return r.json() as Promise<{ url: string }>;
 }
 
+export async function uploadAudio(token: string, file: File) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const r = await fetch("/api/upload-audio", {
+    method: "POST",
+    headers: { "X-Manager-Token": token },
+    body: fd,
+  });
+  if (!r.ok) throw new Error("Upload failed");
+  return r.json() as Promise<{ url: string }>;
+}
+
 export function qrUrl(pin: string) {
   return `/api/qr?pin=${encodeURIComponent(pin)}`;
 }
